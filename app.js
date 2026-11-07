@@ -260,7 +260,8 @@ const progOf = (id) => LS.get('prog:' + id, null);
 
 async function renderShelf() {
   const books = await DB.all('books');
-  books.sort((a, b) => ((progOf(b.id) || {}).at || b.addedAt) - ((progOf(a.id) || {}).at || a.addedAt));
+  const key = (b) => { const p = progOf(b.id); return p ? [1, p.at] : [0, b.addedAt]; };
+  books.sort((a, b) => { const x = key(a), y = key(b); return y[0] - x[0] || y[1] - x[1]; });
   $('#empty').hidden = books.length > 0;
   $('#books').innerHTML = books.map((b) => {
     const p = progOf(b.id);
@@ -283,25 +284,120 @@ async function renderShelf() {
 }
 
 $('#recent').onclick = (e) => openBook(e.currentTarget.dataset.id);
-$('#books').addEventListener('click', async (e) => {
-  const del = e.target.closest('[data-del]');
-  if (del) {
-    const b = await DB.get('books', del.dataset.del);
-    if (confirm(`从书架删掉《${b.title}》？`)) {
-      await DB.del('books', b.id); await DB.del('content', b.id);
-      localStorage.removeItem('prog:' + b.id);
-      renderShelf();
-    }
-    return;
+
+/* 底部弹出菜单（不用系统 confirm，手机主屏 APP 里更可靠） */
+function sheet(title, items) {
+  return new Promise((done) => {
+    const box = $('#sheet');
+    box.querySelector('.sheet-title').textContent = title;
+    const list = box.querySelector('.sheet-list');
+    list.innerHTML = items.map((it, i) => `<button data-i="${i}" class="${it.danger ? 'danger' : ''}">${esc(it.label)}</button>`).join('');
+    const close = (v) => { document.body.classList.remove('sheet-open'); box.onclick = null; done(v); };
+    box.onclick = (e) => {
+      const b = e.target.closest('button[data-i]');
+      if (b) close(items[+b.dataset.i].value);
+      else if (e.target.closest('.sheet-cancel') || e.target === box) close(null);
+    };
+    document.body.classList.add('sheet-open');
+  });
+}
+
+async function deleteBook(b) {
+  const ok = await sheet(`从书架删掉《${b.title}》？阅读进度也会一起删。`, [{ label: '删除', value: 1, danger: true }]);
+  if (!ok) return;
+  await DB.del('books', b.id); await DB.del('content', b.id);
+  localStorage.removeItem('prog:' + b.id);
+  toast(`已删除《${b.title}》`);
+  renderShelf();
+}
+
+function bookToTxt(title, chapters) {
+  let out = title + '\n\n', vol = '';
+  for (const ch of chapters) {
+    if (ch.v && ch.v !== vol) { vol = ch.v; out += '\n' + vol + '\n\n'; }
+    out += ch.t + '\n\n' + ch.x.trim() + '\n\n';
   }
-  const bk = e.target.closest('.book');
-  if (bk && !$('#shelf').classList.contains('managing')) openBook(bk.dataset.id);
+  return out;
+}
+
+async function shareFile(name, text, type) {
+  const file = new File([text], name, { type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+async function exportBook(b) {
+  const c = await DB.get('content', b.id);
+  await shareFile(`${b.title}.txt`, bookToTxt(b.title, c.chapters), 'text/plain');
+}
+
+async function exportAll() {
+  const books = await DB.all('books');
+  if (!books.length) { toast('书架是空的'); return; }
+  const out = [];
+  for (const b of books) {
+    const c = await DB.get('content', b.id);
+    out.push({ key: b.source === 'pc' ? b.id.slice(3) : b.id, title: b.title, chapters: c.chapters });
+  }
+  const d = new Date();
+  await shareFile(`书房备份_${d.getMonth() + 1}月${d.getDate()}日.json`,
+    JSON.stringify({ format: 'shufang', exportedAt: Math.floor(d / 1000), books: out }), 'application/json');
+}
+
+async function bookMenu(id) {
+  const b = await DB.get('books', id);
+  if (!b) return;
+  const act = await sheet(`《${b.title}》 · ${b.count} 章`, [
+    { label: '阅读', value: 'read' },
+    { label: '导出 txt', value: 'export' },
+    { label: '删除', value: 'del', danger: true },
+  ]);
+  if (act === 'read') openBook(id);
+  if (act === 'export') exportBook(b);
+  if (act === 'del') deleteBook(b);
+}
+
+// 长按书本弹菜单
+let pressT = null, pressed = false;
+$('#books').addEventListener('touchstart', (e) => {
+  const bk = e.target.closest('.book'); if (!bk) return;
+  pressed = false;
+  pressT = setTimeout(() => { pressed = true; if (navigator.vibrate) navigator.vibrate(10); bookMenu(bk.dataset.id); }, 450);
+}, { passive: true });
+['touchend', 'touchmove', 'touchcancel'].forEach((t) => $('#books').addEventListener(t, () => clearTimeout(pressT), { passive: true }));
+$('#books').addEventListener('contextmenu', (e) => {
+  const bk = e.target.closest('.book'); if (!bk) return;
+  e.preventDefault(); if (!pressed) bookMenu(bk.dataset.id); pressed = true;
 });
-$('#btnManage').onclick = (e) => {
-  const on = $('#shelf').classList.toggle('managing');
-  e.currentTarget.textContent = on ? '完成' : '管理';
-  e.currentTarget.classList.toggle('on', on);
+
+$('#books').addEventListener('click', async (e) => {
+  if (pressed) { pressed = false; return; }
+  const del = e.target.closest('[data-del]');
+  if (del) { const b = await DB.get('books', del.dataset.del); if (b) deleteBook(b); return; }
+  const bk = e.target.closest('.book');
+  if (!bk) return;
+  if ($('#shelf').classList.contains('managing')) bookMenu(bk.dataset.id);
+  else openBook(bk.dataset.id);
+});
+$('#btnManage').onclick = async () => {
+  const act = await sheet('书架', [
+    { label: '编辑书架（点书删除或导出）', value: 'edit' },
+    { label: '备份全部书（导出 .json）', value: 'all' },
+  ]);
+  if (act === 'all') exportAll();
+  if (act === 'edit') setManaging(true);
 };
+function setManaging(on) {
+  $('#shelf').classList.toggle('managing', on);
+  $('#btnDone').hidden = !on; $('#btnManage').hidden = on;
+}
+$('#btnDone').onclick = () => setManaging(false);
 
 /* ---------- 阅读 ---------- */
 const R = { book: null, chapters: [], c: 0 };
@@ -444,6 +540,11 @@ $('#tocList').onclick = (e) => {
   const li = e.target.closest('li[data-i]'); if (!li) return;
   closeToc(); document.body.classList.remove('menu-on'); goChapter(+li.dataset.i);
 };
+
+if ('serviceWorker' in navigator) {
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !R.book) { reloaded = true; location.reload(); } });
+}
 
 /* ---------- 启动 ---------- */
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress(); });

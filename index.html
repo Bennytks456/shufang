@@ -23,6 +23,7 @@
     <div class="bar-actions">
       <button id="btnSync" class="txt-btn" hidden>同步电脑</button>
       <button id="btnManage" class="txt-btn">管理</button>
+      <button id="btnDone" class="txt-btn on" hidden>完成</button>
       <label class="txt-btn primary">导入
         <input id="fileInput" type="file" accept=".txt,.epub,.json,text/plain,application/epub+zip,application/json" multiple hidden>
       </label>
@@ -33,6 +34,7 @@
   <div id="empty" class="empty" hidden>
     <p>书架还是空的</p>
     <p class="sub">点右上角「导入」，选 txt、epub，或电脑导出的 .json 书包</p>
+    <p class="sub">长按书本可以删除、导出</p>
   </div>
 </section>
 
@@ -82,6 +84,13 @@
   <div class="toc-head"><span id="tocBook"></span><button id="tocJump" class="txt-btn">定位</button></div>
   <ol id="tocList"></ol>
 </aside>
+
+<div id="sheet" class="sheet">
+  <div class="sheet-box">
+    <div class="sheet-group"><div class="sheet-title"></div><div class="sheet-list"></div></div>
+    <button class="sheet-cancel">取消</button>
+  </div>
+</div>
 
 <div id="toast" class="toast"></div>
 

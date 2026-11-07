@@ -108,3 +108,17 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   background: rgba(0,0,0,.78); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 14px;
   opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; max-width: 86%; text-align: center; }
 .toast.show { opacity: 1; }
+
+/* 弹出菜单 */
+.book { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.sheet { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.35); display: none;
+  align-items: flex-end; justify-content: center; }
+.sheet-open .sheet { display: flex; }
+.sheet-box { width: 100%; max-width: 480px; padding: 0 10px calc(var(--sb) + 10px); animation: up .2s ease; }
+@keyframes up { from { transform: translateY(100%); } to { transform: none; } }
+.sheet-group, .sheet-cancel { background: var(--panel); border-radius: 14px; overflow: hidden; }
+.sheet-title { padding: 14px 18px; font-size: 13px; color: var(--sub); text-align: center; border-bottom: 1px solid var(--line); }
+.sheet-list button, .sheet-cancel { display: block; width: 100%; padding: 16px; font-size: 18px; color: #2f7de1; }
+.sheet-list button + button { border-top: 1px solid var(--line); }
+.sheet-list button.danger { color: #e0403a; }
+.sheet-cancel { margin-top: 8px; font-weight: 600; }
