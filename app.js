@@ -39,23 +39,53 @@ const LS = {
   set(k, v) { localStorage.setItem(k, JSON.stringify(v)); },
 };
 
-const settings = Object.assign(
-  { fs: 19, lh: 1.85, theme: 'paper', serif: true, mode: 'tap' },
-  LS.get('settings', {})
-);
+const FONTS = [
+  { id: 'sys', name: '苹方', css: '-apple-system, "PingFang SC", sans-serif' },
+  { id: 'serif', name: '思源宋体', css: '"Noto Serif SC", "Songti SC", serif', href: 'https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&display=swap' },
+  { id: 'kai', name: '霞鹜文楷', css: '"LXGW WenKai Screen", "Kaiti SC", serif', href: 'https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaigbscreen.css' },
+  { id: 'sans', name: '思源黑体', css: '"Noto Sans SC", "PingFang SC", sans-serif', href: 'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap' },
+  { id: 'xiaowei', name: '站酷小薇', css: '"ZCOOL XiaoWei", serif', href: 'https://fonts.googleapis.com/css2?family=ZCOOL+XiaoWei&display=swap' },
+];
+const THEMES = [
+  { id: 'paper', name: '米黄', c: '#f6f1e7' }, { id: 'white', name: '纯白', c: '#ffffff' },
+  { id: 'parch', name: '羊皮纸', c: '#e9dcc0' }, { id: 'green', name: '护眼绿', c: '#cfe3c9' },
+  { id: 'blue', name: '淡蓝', c: '#dfe8f0' }, { id: 'gray', name: '浅灰', c: '#e4e4e1' },
+  { id: 'night', name: '夜间', c: '#16161a', dark: true }, { id: 'black', name: '纯黑', c: '#000000', dark: true },
+];
+const TYPE_DEFAULTS = { fs: 19, lh: 1.85, pg: 0.7, ls: 0, pad: 22, font: 'serif' };
+const DEFAULTS = { ...TYPE_DEFAULTS, theme: 'paper', lastDay: 'paper', auto: true, bright: 100, warm: false, warmLv: 18, mode: 'tap' };
+const savedSettings = LS.get('settings', {});
+const settings = Object.assign({}, DEFAULTS, savedSettings);
+if ('serif' in settings) { if (!savedSettings.font) settings.font = settings.serif ? 'serif' : 'sys'; delete settings.serif; }
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const darkMQ = matchMedia('(prefers-color-scheme: dark)');
+const isDark = (t) => !!(THEMES.find((x) => x.id === t) || {}).dark;
+const effTheme = () => (settings.auto && darkMQ.matches && !isDark(settings.theme) ? 'night' : settings.theme);
+const loadedFonts = new Set();
+function loadFont(f) {
+  if (!f.href || loadedFonts.has(f.id)) return;
+  loadedFonts.add(f.id);
+  const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = f.href; document.head.append(l);
+}
 function saveSettings() { LS.set('settings', settings); applySettings(); }
 function applySettings() {
-  document.documentElement.style.setProperty('--fs', settings.fs + 'px');
-  document.documentElement.style.setProperty('--lh', settings.lh.toFixed(2));
-  document.body.dataset.theme = settings.theme;
-  document.body.classList.toggle('serif', settings.serif);
-  $('#fontVal').textContent = settings.fs;
-  $('#btnFace').textContent = settings.serif ? '宋体' : '黑体';
-  $('#btnMode').textContent = settings.mode === 'tap' ? '点击翻页' : '上下滚动';
-  $$('.swatch').forEach((b) => b.classList.toggle('on', b.dataset.theme === settings.theme));
+  const st = document.documentElement.style;
+  const font = FONTS.find((f) => f.id === settings.font) || FONTS[0];
+  loadFont(font);
+  st.setProperty('--fs', settings.fs + 'px');
+  st.setProperty('--lh', settings.lh.toFixed(2));
+  st.setProperty('--pg', settings.pg + 'em');
+  st.setProperty('--ls', settings.ls + 'em');
+  st.setProperty('--pad', settings.pad + 'px');
+  st.setProperty('--face', font.css);
+  document.body.dataset.theme = effTheme();
+  $('#dim').style.opacity = (1 - settings.bright / 100).toFixed(2);
+  $('#warm').style.opacity = settings.warm ? (settings.warmLv / 100).toFixed(2) : '0';
+  syncPanel();
   const meta = document.querySelector('meta[name=theme-color]');
   meta.content = getComputedStyle(document.body).getPropertyValue('--bg').trim() || '#f6f1e7';
 }
+darkMQ.addEventListener('change', applySettings);
 
 function toast(msg, ms = 2200) {
   const t = $('#toast');
@@ -188,7 +218,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 7;
+const VERSION = 8;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -215,7 +245,24 @@ async function importLibrary(lib, cloud) {
     const same = b.h ? old && old.h === b.h : old && old.count === b.chapters.length && old.size === size;
     if (same) continue;
     const added = old ? b.chapters.length - old.count : 0;
-    await saveBook({ id, title: b.title, source: 'pc', size, h: b.h, addedAt: old ? old.addedAt : Date.now() }, b.chapters);
+    // 红点：新加的章，和已经读过但被改过的章（没开始读的书不标）
+    let upd = [], diffs = !old;
+    if (old) {
+      const oc = ((await DB.get('content', id)) || {}).chapters || [];
+      const p = progOf(id);
+      const set = new Set((old.upd || []).filter((i) => i < b.chapters.length));
+      b.chapters.forEach((c, i) => {
+        const o = oc[i];
+        if (o && o.t === c.t && o.x === c.x) return;
+        diffs = true;
+        if (p && (i >= oc.length || i <= p.c)) set.add(i);
+      });
+      upd = [...set].sort((x, y) => x - y);
+    }
+    const meta = { id, title: b.title, source: 'pc', size, h: b.h, upd, addedAt: old ? old.addedAt : Date.now() };
+    await saveBook(meta, b.chapters);
+    if (R.book && R.book.id === id) { R.chapters = b.chapters; R.book = meta; }
+    if (!diffs) continue; // 只是修改时间变了，内容一样：不提示
     changed.push(old ? (added > 0 ? `《${b.title}》+${added} 章` : `《${b.title}》有改动`) : `新书《${b.title}》`);
   }
   // 电脑上设为「不同步」的书：从书架移除，阅读进度留着
@@ -339,11 +386,13 @@ async function renderShelf() {
   $('#emptyBtn').textContent = LS.get('syncKey', '') ? '选择要同步的书' : '填同步密钥，拿电脑上的书';
   $('#books').innerHTML = books.map((b) => {
     const p = progOf(b.id);
-    const txt = p ? `读到 ${p.c + 1}/${b.count} 章` : `未读 · ${b.count} 章`;
+    const unread = p ? Math.max(0, b.count - p.c - 1) : b.count;
+    const txt = unread ? `${unread} 章未读` : '已读完';
+    const dot = b.upd && b.upd.length ? '<i class="dot"></i>' : '';
     return `<div class="book" data-id="${esc(b.id)}">
-      <div class="cover" style="${coverStyle(b.title)}"><div class="ct">${esc(b.title.slice(0, 12))}</div>
+      <div class="cover" style="${coverStyle(b.title)}">${dot}<div class="ct">${esc(b.title.slice(0, 12))}</div>
       <div class="cs">${b.source === 'pc' ? '我的书' : ''}</div></div>
-      <div class="name">${esc(b.title)}</div><div class="prog">${txt}</div>
+      <div class="name">${esc(b.title)}</div><div class="prog${unread && p ? ' unread' : ''}">${txt}</div>
       <button class="del" data-del="${esc(b.id)}">×</button></div>`;
   }).join('');
   const last = books.find((b) => progOf(b.id));
@@ -352,7 +401,8 @@ async function renderShelf() {
     const p = progOf(last.id);
     const c = await DB.get('content', last.id);
     const ct = c && c.chapters[p.c] ? c.chapters[p.c].t : '';
-    rc.innerHTML = `<div class="lbl">继续阅读</div><div class="t">${esc(last.title)}</div><div class="c">${esc(ct)}</div>`;
+    const left = Math.max(0, last.count - p.c - 1);
+    rc.innerHTML = `<div class="lbl">继续阅读</div><div class="t">${esc(last.title)}</div><div class="c">${esc(ct)}${left ? ` · 还有 ${left} 章未读` : ''}</div>`;
     rc.dataset.id = last.id; rc.hidden = false;
   } else rc.hidden = true;
 }
@@ -431,12 +481,12 @@ async function exportAll() {
 async function bookMenu(id) {
   const b = await DB.get('books', id);
   if (!b) return;
-  const act = await sheet(`《${b.title}》 · ${b.count} 章`, [
-    { label: '阅读', value: 'read' },
-    { label: '导出 txt', value: 'export' },
-    { label: '删除', value: 'del', danger: true },
-  ]);
+  const items = [{ label: '阅读', value: 'read' }];
+  if (b.upd && b.upd.length) items.push({ label: `去掉更新红点（${b.upd.length} 章有更新）`, value: 'seen' });
+  items.push({ label: '导出 txt', value: 'export' }, { label: '删除', value: 'del', danger: true });
+  const act = await sheet(`《${b.title}》 · ${b.count} 章`, items);
   if (act === 'read') openBook(id);
+  if (act === 'seen') { await clearUpd(b, b.upd.slice()); renderShelf(); }
   if (act === 'export') exportBook(b);
   if (act === 'del') deleteBook(b);
 }
@@ -557,6 +607,7 @@ function renderChapter(ratio = 0) {
     `<div class="end">${last ? '<div class="done">— 已读到最后一章 —</div>' : '<button id="endNext">下一章</button>'}</div>`;
   $('#readTitle').textContent = R.book.title;
   $('#infoChap').textContent = ch.t;
+  clearUpd(R.book, [R.c]);
   $('#chapSlider').max = R.chapters.length - 1;
   $('#chapSlider').value = R.c;
   const en = $('#endNext'); if (en) en.onclick = (e) => { e.stopPropagation(); goChapter(R.c + 1); };
@@ -564,6 +615,13 @@ function renderChapter(ratio = 0) {
     scroller.scrollTop = ratio * (scroller.scrollHeight - scroller.clientHeight);
     updateInfo(); saveProgress();
   });
+}
+
+async function clearUpd(book, idx) {
+  if (!book || !book.upd || !book.upd.some((i) => idx.includes(i))) return;
+  book.upd = book.upd.filter((i) => !idx.includes(i));
+  const m = await DB.get('books', book.id);
+  if (m) { m.upd = (m.upd || []).filter((i) => !idx.includes(i)); await DB.put('books', m); }
 }
 
 function curRatio() {
@@ -604,7 +662,7 @@ async function openBook(id) {
 function closeBook() {
   saveProgress();
   R.book = null;
-  closeToc();
+  closeToc(); closePanel();
   $('#reader').classList.remove('active');
   $('#shelf').classList.add('active');
   document.body.classList.remove('menu-on');
@@ -617,6 +675,7 @@ window.addEventListener('popstate', () => { if (R.book) closeBook(); });
 // 点按：左三分之一上翻，右三分之一下翻，中间呼出菜单
 scroller.addEventListener('click', (e) => {
   if (e.target.closest('button')) return;
+  if (document.body.classList.contains('panel-open')) { closePanel(); return; }
   if (document.body.classList.contains('menu-on')) { document.body.classList.remove('menu-on'); return; }
   const x = e.clientX / window.innerWidth;
   if (settings.mode === 'tap' && (x < 0.33 || x > 0.67)) {
@@ -640,17 +699,76 @@ $('#chapSlider').oninput = (e) => { $('#infoChap').textContent = R.chapters[+e.t
 $('#chapSlider').onchange = (e) => goChapter(+e.target.value);
 
 function keepRatio(fn) { const r = curRatio(); fn(); requestAnimationFrame(() => { scroller.scrollTop = r * (scroller.scrollHeight - scroller.clientHeight); }); }
-$$('[data-font]').forEach((b) => b.onclick = () => keepRatio(() => {
-  settings.fs = Math.max(13, Math.min(32, settings.fs + +b.dataset.font)); saveSettings();
-}));
-$$('[data-lh]').forEach((b) => b.onclick = () => keepRatio(() => {
-  settings.lh = Math.max(1.3, Math.min(2.6, settings.lh + +b.dataset.lh)); saveSettings();
-}));
-$$('.swatch').forEach((b) => b.onclick = () => { settings.theme = b.dataset.theme; saveSettings(); });
-$('#btnFace').onclick = () => keepRatio(() => { settings.serif = !settings.serif; saveSettings(); });
-$('#btnMode').onclick = () => {
-  settings.mode = settings.mode === 'tap' ? 'scroll' : 'tap'; saveSettings();
+// 设置面板里的控件随设置刷新
+function syncPanel() {
+  $('#fsVal').textContent = settings.fs;
+  const set = (id, v, txt) => { $(id).value = v; const t = $('#v' + id.slice(2)); if (t) t.textContent = txt; };
+  set('#sLh', settings.lh, settings.lh.toFixed(2));
+  set('#sPg', settings.pg, settings.pg.toFixed(1));
+  set('#sLs', settings.ls, settings.ls.toFixed(2));
+  set('#sPad', settings.pad, settings.pad);
+  $('#sBright').value = settings.bright;
+  $('#sWarm').checked = settings.warm;
+  $('#sWarmLv').value = settings.warmLv; $('#sWarmLv').disabled = !settings.warm;
+  $('#sAuto').checked = settings.auto;
+  $('#fontList').innerHTML = FONTS.map((f) => `<button data-f="${f.id}" class="${f.id === settings.font ? 'on' : ''}" style='font-family:${f.css}'>${f.name}</button>`).join('');
+  $('#themeList').innerHTML = THEMES.map((t) => `<button data-t="${t.id}" class="${t.id === settings.theme ? 'on' : ''}" style="background:${t.c}"><span>${t.name}</span></button>`).join('');
+  $$('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === settings.mode));
+  const dark = isDark(effTheme());
+  $('#tNightIco').textContent = dark ? '☀' : '☾';
+  $('#tNightTxt').textContent = dark ? '日间' : '夜间';
+}
+
+function keepRatio(fn) { const r = curRatio(); fn(); requestAnimationFrame(() => { scroller.scrollTop = r * (scroller.scrollHeight - scroller.clientHeight); }); }
+const keepSave = (fn) => keepRatio(() => { fn(); saveSettings(); });
+$$('[data-fs]').forEach((b) => b.onclick = () => keepSave(() => { settings.fs = clamp(settings.fs + +b.dataset.fs, 13, 34); }));
+function bindRange(sel, key, layout) {
+  $(sel).oninput = (e) => {
+    const f = () => { settings[key] = parseFloat(e.target.value); saveSettings(); };
+    if (layout) keepRatio(f); else f();
+  };
+}
+bindRange('#sLh', 'lh', true); bindRange('#sPg', 'pg', true); bindRange('#sLs', 'ls', true); bindRange('#sPad', 'pad', true);
+bindRange('#sBright', 'bright', false); bindRange('#sWarmLv', 'warmLv', false);
+$('#sWarm').onchange = (e) => { settings.warm = e.target.checked; saveSettings(); };
+$('#sAuto').onchange = (e) => { settings.auto = e.target.checked; saveSettings(); };
+$('#fontList').onclick = (e) => {
+  const b = e.target.closest('[data-f]'); if (!b) return;
+  keepSave(() => { settings.font = b.dataset.f; });
+};
+$('#themeList').onclick = (e) => {
+  const b = e.target.closest('[data-t]'); if (!b) return;
+  settings.theme = b.dataset.t;
+  if (!isDark(settings.theme)) settings.lastDay = settings.theme;
+  saveSettings();
+  if (settings.auto && darkMQ.matches && !isDark(settings.theme)) toast('手机现在是深色模式，跟随系统会先用夜间；要用这个背景，关掉「跟随系统」');
+};
+$$('.seg button').forEach((b) => b.onclick = () => {
+  settings.mode = b.dataset.mode; saveSettings();
   toast(settings.mode === 'tap' ? '点屏幕左右两边翻页，中间呼出菜单' : '上下滑动阅读，点屏幕呼出菜单');
+});
+$('#sReset').onclick = () => keepSave(() => Object.assign(settings, TYPE_DEFAULTS));
+
+function openPanel(which) {
+  document.body.classList.remove('menu-on');
+  $('#pLight').hidden = which !== 'light';
+  $('#pType').hidden = which !== 'type';
+  if (which === 'type') FONTS.forEach(loadFont); // 让字体按钮显示各自的字形
+  document.body.classList.add('panel-open');
+}
+function closePanel() { document.body.classList.remove('panel-open'); }
+$('#tLight').onclick = () => openPanel('light');
+$('#tFont').onclick = () => openPanel('type');
+$('#tToc').onclick = () => { document.body.classList.remove('menu-on'); openToc(); };
+$('#tNight').onclick = () => {
+  if (isDark(effTheme())) {
+    if (isDark(settings.theme)) settings.theme = settings.lastDay || 'paper';
+    if (settings.auto && darkMQ.matches) { settings.auto = false; toast('已关掉「跟随系统」，现在用日间'); }
+  } else {
+    if (!isDark(settings.theme)) settings.lastDay = settings.theme;
+    settings.theme = 'night';
+  }
+  saveSettings();
 };
 
 $('#btnReadMore').onclick = async () => {
@@ -672,7 +790,8 @@ function openToc() {
   let html = '', vol = null;
   R.chapters.forEach((ch, i) => {
     if (ch.v !== vol) { vol = ch.v; if (vol) html += `<li class="vol">${esc(vol)}</li>`; }
-    html += `<li data-i="${i}" class="${i === R.c ? 'cur' : i < R.c ? 'read' : ''}">${esc(ch.t)}</li>`;
+    const upd = R.book.upd && R.book.upd.includes(i) ? ' upd' : '';
+    html += `<li data-i="${i}" class="${i === R.c ? 'cur' : i < R.c ? 'read' : ''}${upd}">${esc(ch.t)}</li>`;
   });
   $('#tocList').innerHTML = html;
   document.body.classList.add('toc-open');

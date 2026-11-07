@@ -56,25 +56,31 @@
       <input id="chapSlider" type="range" min="0" max="0" value="0">
       <button id="btnNext" class="txt-btn">下一章</button>
     </div>
-    <div class="row settings">
-      <div class="grp">
-        <button class="txt-btn" data-font="-1">A−</button>
-        <span id="fontVal">19</span>
-        <button class="txt-btn" data-font="1">A+</button>
-      </div>
-      <div class="grp">
-        <button class="txt-btn" data-lh="-0.1">行距−</button>
-        <button class="txt-btn" data-lh="0.1">行距+</button>
-      </div>
-      <button id="btnFace" class="txt-btn">宋体</button>
+    <div class="row tools">
+      <button class="tool" id="tToc"><b>☰</b>目录</button>
+      <button class="tool" id="tLight"><b>☼</b>亮度</button>
+      <button class="tool" id="tFont"><b>Aa</b>字体排版</button>
+      <button class="tool" id="tNight"><b id="tNightIco">☾</b><span id="tNightTxt">夜间</span></button>
     </div>
-    <div class="row themes">
-      <button class="swatch" data-theme="paper" aria-label="米黄"></button>
-      <button class="swatch" data-theme="white" aria-label="白"></button>
-      <button class="swatch" data-theme="green" aria-label="护眼"></button>
-      <button class="swatch" data-theme="gray" aria-label="灰"></button>
-      <button class="swatch" data-theme="night" aria-label="夜间"></button>
-      <button id="btnMode" class="txt-btn">点击翻页</button>
+  </div>
+
+  <div id="panel" class="panel">
+    <div id="pLight" class="pane">
+      <div class="prow"><span class="pl">亮度</span><span class="ico">☼</span><input type="range" id="sBright" min="25" max="100" step="1"><span class="ico big">☀</span></div>
+      <div class="prow"><span class="pl">护眼</span><input type="checkbox" class="sw" id="sWarm"><input type="range" id="sWarmLv" min="5" max="45" step="1"><span class="val">暖</span></div>
+      <div class="prow"><span class="pl">跟随系统</span><span class="hint">手机切到深色模式时，自动用夜间</span><input type="checkbox" class="sw" id="sAuto"></div>
+      <div class="prow wrap"><span class="pl">背景</span><div id="themeList" class="themes2"></div></div>
+      <div class="pnote">亮度是书房自己调暗，手机本身的亮度在控制中心调。</div>
+    </div>
+    <div id="pType" class="pane">
+      <div class="prow"><span class="pl">字号</span><button class="stepbtn" data-fs="-1">A−</button><span id="fsVal" class="val mid"></span><button class="stepbtn" data-fs="1">A+</button></div>
+      <div class="prow wrap"><span class="pl">字体</span><div id="fontList" class="fontlist"></div></div>
+      <div class="prow"><span class="pl">行距</span><input type="range" id="sLh" min="1.3" max="2.6" step="0.05"><span id="vLh" class="val"></span></div>
+      <div class="prow"><span class="pl">段距</span><input type="range" id="sPg" min="0" max="2" step="0.1"><span id="vPg" class="val"></span></div>
+      <div class="prow"><span class="pl">字距</span><input type="range" id="sLs" min="0" max="0.2" step="0.01"><span id="vLs" class="val"></span></div>
+      <div class="prow"><span class="pl">边距</span><input type="range" id="sPad" min="8" max="48" step="2"><span id="vPad" class="val"></span></div>
+      <div class="prow"><span class="pl">翻页</span><div class="seg"><button data-mode="tap">点击翻页</button><button data-mode="scroll">上下滚动</button></div></div>
+      <div class="prow end"><button id="sReset" class="txt-btn">排版恢复默认</button></div>
     </div>
   </div>
 </section>
@@ -112,6 +118,9 @@
 </div>
 
 <div id="toast" class="toast"></div>
+
+<div id="warm" class="overlay"></div>
+<div id="dim" class="overlay"></div>
 
 <script src="zip.js"></script>
 <script src="app.js"></script>
