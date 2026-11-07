@@ -4,7 +4,7 @@
 规则：桌面上每个文件夹算一本书，书里的子文件夹算一卷，
 卷里文件名以「第xx章」开头的 .md 算一章。以 . 开头的文件夹（如 .草稿）不读。
 """
-import json, re, sys, time
+import hashlib, json, re, sys, time
 from pathlib import Path
 
 DESKTOP = Path.home() / "Desktop"
@@ -70,7 +70,8 @@ def collect(verbose=False):
                 title = re.sub(r"_", " ", f.stem, count=1).replace("_", " ")
                 chapters.append({"t": title, "v": vol_title(vol), "x": clean(f.read_text("utf-8"))})
         if chapters:
-            books.append({"key": book.name, "title": book.name.replace("_", " "), "chapters": chapters})
+            h = hashlib.sha256(json.dumps(chapters, ensure_ascii=False).encode()).hexdigest()[:16]
+            books.append({"key": book.name, "title": book.name.replace("_", " "), "h": h, "chapters": chapters})
             if verbose:
                 print(f"  《{book.name}》 {len(chapters)} 章")
     return {"format": "shufang", "exportedAt": int(time.time()), "books": books}

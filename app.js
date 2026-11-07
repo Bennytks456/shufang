@@ -189,7 +189,7 @@ async function saveBook(meta, chapters) {
 }
 
 const hiddenPc = () => LS.get('hiddenPc', []);
-const VERSION = 3;
+const VERSION = 4;
 
 // cloud=true：自动同步，跳过手机上删掉的书；false：手动导入，全部放回书架
 async function importLibrary(lib, cloud) {
@@ -202,9 +202,10 @@ async function importLibrary(lib, cloud) {
     const id = 'pc:' + b.key;
     const old = books.find((x) => x.id === id);
     const size = b.chapters.reduce((n, c) => n + c.x.length, 0);
-    if (old && old.count === b.chapters.length && old.size === size) continue;
+    const same = b.h ? old && old.h === b.h : old && old.count === b.chapters.length && old.size === size;
+    if (same) continue;
     const added = old ? b.chapters.length - old.count : 0;
-    await saveBook({ id, title: b.title, source: 'pc', size, addedAt: old ? old.addedAt : Date.now() }, b.chapters);
+    await saveBook({ id, title: b.title, source: 'pc', size, h: b.h, addedAt: old ? old.addedAt : Date.now() }, b.chapters);
     changed.push(old ? (added > 0 ? `《${b.title}》+${added} 章` : `《${b.title}》有改动`) : `新书《${b.title}》`);
   }
   if (changed.length) toast('已同步：' + changed.join('，'), 3500);
