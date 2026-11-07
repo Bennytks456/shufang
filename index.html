@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="书房">
+<meta name="theme-color" content="#f6f1e7">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+<title>书房</title>
+</head>
+<body>
+
+<!-- 书架 -->
+<section id="shelf" class="page active">
+  <header class="bar">
+    <h1>书房</h1>
+    <div class="bar-actions">
+      <button id="btnSync" class="txt-btn" hidden>同步电脑</button>
+      <button id="btnManage" class="txt-btn">管理</button>
+      <label class="txt-btn primary">导入
+        <input id="fileInput" type="file" accept=".txt,.epub,.json,text/plain,application/epub+zip,application/json" multiple hidden>
+      </label>
+    </div>
+  </header>
+  <div id="recent" class="recent" hidden></div>
+  <div id="books" class="books"></div>
+  <div id="empty" class="empty" hidden>
+    <p>书架还是空的</p>
+    <p class="sub">点右上角「导入」，选 txt、epub，或电脑导出的 .json 书包</p>
+  </div>
+</section>
+
+<!-- 阅读 -->
+<section id="reader" class="page">
+  <div id="readTop" class="read-top">
+    <button id="btnBack" class="icon-btn" aria-label="返回">‹</button>
+    <div id="readTitle" class="read-title"></div>
+    <button id="btnToc" class="icon-btn" aria-label="目录">☰</button>
+  </div>
+  <div id="scroller" class="scroller">
+    <article id="content" class="content"></article>
+  </div>
+  <div id="readInfo" class="read-info"><span id="infoChap"></span><span id="infoPct"></span></div>
+  <div id="readBottom" class="read-bottom">
+    <div class="row">
+      <button id="btnPrev" class="txt-btn">上一章</button>
+      <input id="chapSlider" type="range" min="0" max="0" value="0">
+      <button id="btnNext" class="txt-btn">下一章</button>
+    </div>
+    <div class="row settings">
+      <div class="grp">
+        <button class="txt-btn" data-font="-1">A−</button>
+        <span id="fontVal">19</span>
+        <button class="txt-btn" data-font="1">A+</button>
+      </div>
+      <div class="grp">
+        <button class="txt-btn" data-lh="-0.1">行距−</button>
+        <button class="txt-btn" data-lh="0.1">行距+</button>
+      </div>
+      <button id="btnFace" class="txt-btn">宋体</button>
+    </div>
+    <div class="row themes">
+      <button class="swatch" data-theme="paper" aria-label="米黄"></button>
+      <button class="swatch" data-theme="white" aria-label="白"></button>
+      <button class="swatch" data-theme="green" aria-label="护眼"></button>
+      <button class="swatch" data-theme="gray" aria-label="灰"></button>
+      <button class="swatch" data-theme="night" aria-label="夜间"></button>
+      <button id="btnMode" class="txt-btn">点击翻页</button>
+    </div>
+  </div>
+</section>
+
+<!-- 目录 -->
+<div id="tocMask" class="mask"></div>
+<aside id="toc" class="toc">
+  <div class="toc-head"><span id="tocBook"></span><button id="tocJump" class="txt-btn">定位</button></div>
+  <ol id="tocList"></ol>
+</aside>
+
+<div id="toast" class="toast"></div>
+
+<script src="zip.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,456 @@
+'use strict';
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+
+/* ---------- 存储 ---------- */
+const DB = (() => {
+  let dbp;
+  function open() {
+    if (!dbp) dbp = new Promise((ok, no) => {
+      const r = indexedDB.open('shufang', 1);
+      r.onupgradeneeded = () => {
+        r.result.createObjectStore('books', { keyPath: 'id' });
+        r.result.createObjectStore('content', { keyPath: 'id' });
+      };
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => no(r.error);
+    });
+    return dbp;
+  }
+  async function tx(store, mode, fn) {
+    const db = await open();
+    return new Promise((ok, no) => {
+      const t = db.transaction(store, mode);
+      const req = fn(t.objectStore(store));
+      t.oncomplete = () => ok(req && req.result);
+      t.onerror = () => no(t.error);
+    });
+  }
+  return {
+    all: (s) => tx(s, 'readonly', (o) => o.getAll()),
+    get: (s, k) => tx(s, 'readonly', (o) => o.get(k)),
+    put: (s, v) => tx(s, 'readwrite', (o) => o.put(v)),
+    del: (s, k) => tx(s, 'readwrite', (o) => o.delete(k)),
+  };
+})();
+
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { localStorage.setItem(k, JSON.stringify(v)); },
+};
+
+const settings = Object.assign(
+  { fs: 19, lh: 1.85, theme: 'paper', serif: true, mode: 'tap' },
+  LS.get('settings', {})
+);
+function saveSettings() { LS.set('settings', settings); applySettings(); }
+function applySettings() {
+  document.documentElement.style.setProperty('--fs', settings.fs + 'px');
+  document.documentElement.style.setProperty('--lh', settings.lh.toFixed(2));
+  document.body.dataset.theme = settings.theme;
+  document.body.classList.toggle('serif', settings.serif);
+  $('#fontVal').textContent = settings.fs;
+  $('#btnFace').textContent = settings.serif ? '宋体' : '黑体';
+  $('#btnMode').textContent = settings.mode === 'tap' ? '点击翻页' : '上下滚动';
+  $$('.swatch').forEach((b) => b.classList.toggle('on', b.dataset.theme === settings.theme));
+  const meta = document.querySelector('meta[name=theme-color]');
+  meta.content = getComputedStyle(document.body).getPropertyValue('--bg').trim() || '#f6f1e7';
+}
+
+function toast(msg, ms = 2200) {
+  const t = $('#toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), ms);
+}
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------- 解析：txt ---------- */
+const NUM = '0-9０-９零〇一二两三四五六七八九十百千万';
+const CHAP_RE = new RegExp(`^(第[${NUM}]+[章回节集话篇]|序章|序言|楔子|引子|尾声|后记|番外|前言|终章)`);
+const VOL_RE = new RegExp(`^第[${NUM}]+[卷部]`);
+
+function decodeText(buf) {
+  const u8 = new Uint8Array(buf);
+  if (u8[0] === 0xff && u8[1] === 0xfe) return new TextDecoder('utf-16le').decode(u8);
+  if (u8[0] === 0xfe && u8[1] === 0xff) return new TextDecoder('utf-16be').decode(u8);
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(u8); }
+  catch { return new TextDecoder('gb18030').decode(u8); }
+}
+
+function parseTxt(text) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const chapters = [];
+  let vol = '', cur = null, pre = [];
+  for (const raw of lines) {
+    const line = raw.replace(/^[\s　]+|[\s　]+$/g, '').replace(/^#+\s*/, '');
+    if (line && line.length <= 40 && VOL_RE.test(line) && !CHAP_RE.test(line)) {
+      vol = line; continue;
+    }
+    if (line && line.length <= 40 && CHAP_RE.test(line)) {
+      cur = { t: line, v: vol, x: '' }; chapters.push(cur); continue;
+    }
+    if (cur) cur.x += raw + '\n'; else pre.push(raw);
+  }
+  const preText = pre.join('\n').trim();
+  if (!chapters.length) {
+    // 没认出章节：按长度切
+    const out = [];
+    for (let i = 0, n = 1; i < preText.length; n++) {
+      let end = Math.min(preText.length, i + 6000);
+      const nl = preText.indexOf('\n', end);
+      if (nl > 0 && nl - end < 2000) end = nl;
+      out.push({ t: `第${n}节`, v: '', x: preText.slice(i, end) });
+      i = end;
+    }
+    return out;
+  }
+  if (preText.length > 30) chapters.unshift({ t: '前言', v: '', x: preText });
+  return chapters;
+}
+
+/* ---------- 解析：epub ---------- */
+async function parseEpub(buf) {
+  const zip = await readZip(buf);
+  const xml = (s) => new DOMParser().parseFromString(s, 'application/xml');
+  const container = xml(await zip.text('META-INF/container.xml'));
+  const opfPath = container.querySelector('rootfile').getAttribute('full-path');
+  const base = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+  const opf = xml(await zip.text(opfPath));
+  const resolve = (dir, href) => {
+    const parts = (dir + decodeURIComponent(href.split('#')[0])).split('/');
+    const out = [];
+    for (const p of parts) { if (p === '..') out.pop(); else if (p !== '.') out.push(p); }
+    return out.join('/');
+  };
+  const manifest = {};
+  opf.querySelectorAll('manifest > item').forEach((it) => {
+    manifest[it.getAttribute('id')] = { href: resolve(base, it.getAttribute('href')), props: it.getAttribute('properties') || '', type: it.getAttribute('media-type') };
+  });
+  const title = (opf.getElementsByTagName('dc:title')[0] || {}).textContent;
+
+  // 目录标题
+  const labels = {};
+  const navItem = Object.values(manifest).find((m) => m.props.includes('nav'));
+  const ncxItem = Object.values(manifest).find((m) => m.type === 'application/x-dtbncx+xml');
+  try {
+    if (navItem) {
+      const d = new DOMParser().parseFromString(await zip.text(navItem.href), 'text/html');
+      const dir = navItem.href.slice(0, navItem.href.lastIndexOf('/') + 1);
+      d.querySelectorAll('nav a[href]').forEach((a) => {
+        const k = resolve(dir, a.getAttribute('href'));
+        if (!labels[k]) labels[k] = a.textContent.trim();
+      });
+    } else if (ncxItem) {
+      const d = xml(await zip.text(ncxItem.href));
+      const dir = ncxItem.href.slice(0, ncxItem.href.lastIndexOf('/') + 1);
+      d.querySelectorAll('navPoint').forEach((np) => {
+        const src = np.querySelector('content').getAttribute('src');
+        const k = resolve(dir, src);
+        if (!labels[k]) labels[k] = np.querySelector('navLabel').textContent.trim();
+      });
+    }
+  } catch (e) { console.warn('目录解析失败', e); }
+
+  const chapters = [];
+  let vol = '';
+  for (const ref of opf.querySelectorAll('spine > itemref')) {
+    const m = manifest[ref.getAttribute('idref')];
+    if (!m) continue;
+    const html = await zip.text(m.href);
+    if (!html) continue;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('script,style').forEach((e) => e.remove());
+    doc.querySelectorAll('br').forEach((e) => e.replaceWith('\n'));
+    doc.querySelectorAll('p,div,h1,h2,h3,h4,h5,h6,li,blockquote,section').forEach((e) => e.append('\n'));
+    let lines = (doc.body ? doc.body.textContent : '').split('\n').map((s) => s.trim()).filter(Boolean);
+    const head = ((doc.querySelector('h1,h2,h3') || {}).textContent || '').trim();
+    let t = (labels[m.href] || head).trim();
+    if (head && lines[0] === head && head.length <= 40 && lines.length > 1) lines = lines.slice(1);
+    if (lines.join('').length < 20) {
+      if (t && VOL_RE.test(t)) vol = t; // 卷首页
+      continue;
+    }
+    if (!t) t = lines[0].length <= 40 ? lines[0] : `第${chapters.length + 1}节`;
+    if (lines[0] === t) lines = lines.slice(1);
+    chapters.push({ t, v: vol, x: lines.join('\n') });
+  }
+  if (!chapters.length) throw new Error('这本 epub 里没读到正文');
+  return { title, chapters };
+}
+
+/* ---------- 导入 ---------- */
+function newId() { return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+async function saveBook(meta, chapters) {
+  meta.count = chapters.length;
+  meta.updatedAt = Date.now();
+  await DB.put('content', { id: meta.id, chapters });
+  await DB.put('books', meta);
+}
+
+async function importLibrary(lib, quiet) {
+  const books = await DB.all('books');
+  let n = 0;
+  for (const b of lib.books || []) {
+    const id = 'pc:' + b.key;
+    const old = books.find((x) => x.id === id);
+    await saveBook({ id, title: b.title, source: 'pc', addedAt: old ? old.addedAt : Date.now() }, b.chapters);
+    n++;
+  }
+  if (lib.exportedAt) LS.set('lastSync', lib.exportedAt);
+  if (!quiet || n) toast(`已同步 ${n} 本书`);
+  return n;
+}
+
+async function importFile(file) {
+  const name = file.name.replace(/\.[^.]+$/, '').replace(/[《》]/g, '').trim();
+  const ext = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
+  const buf = await file.arrayBuffer();
+  if (ext === 'json') {
+    const lib = JSON.parse(decodeText(buf));
+    if (!lib.books) throw new Error('不是书房导出的书包');
+    return importLibrary(lib);
+  }
+  let title = name, chapters;
+  if (ext === 'epub') {
+    const r = await parseEpub(buf);
+    title = r.title || name; chapters = r.chapters;
+  } else {
+    chapters = parseTxt(decodeText(buf));
+  }
+  await saveBook({ id: newId(), title, source: 'import', addedAt: Date.now() }, chapters);
+  toast(`《${title}》已导入，共 ${chapters.length} 章`);
+}
+
+$('#fileInput').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  for (const f of files) {
+    toast(`正在导入 ${f.name}…`, 60000);
+    try { await importFile(f); }
+    catch (err) { console.error(err); toast(`${f.name} 导入失败：${err.message}`, 4000); }
+  }
+  renderShelf();
+});
+
+// 和电脑同步（APP 跟 library.json 放在同一处时可用）
+async function checkSync(manual) {
+  try {
+    const r = await fetch('library.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    const lib = await r.json();
+    $('#btnSync').hidden = false;
+    if (manual || lib.exportedAt !== LS.get('lastSync')) {
+      await importLibrary(lib, !manual);
+      renderShelf();
+    }
+  } catch (e) {
+    if (manual) toast('连不上电脑，先在电脑上运行「开书房」');
+  }
+}
+$('#btnSync').onclick = () => checkSync(true);
+
+/* ---------- 书架 ---------- */
+function coverStyle(title) {
+  let h = 0;
+  for (const c of title) h = (h * 31 + c.codePointAt(0)) % 360;
+  return `background: linear-gradient(160deg, hsl(${h} 38% 42%), hsl(${(h + 30) % 360} 45% 26%))`;
+}
+const progOf = (id) => LS.get('prog:' + id, null);
+
+async function renderShelf() {
+  const books = await DB.all('books');
+  books.sort((a, b) => ((progOf(b.id) || {}).at || b.addedAt) - ((progOf(a.id) || {}).at || a.addedAt));
+  $('#empty').hidden = books.length > 0;
+  $('#books').innerHTML = books.map((b) => {
+    const p = progOf(b.id);
+    const txt = p ? `读到 ${p.c + 1}/${b.count} 章` : `未读 · ${b.count} 章`;
+    return `<div class="book" data-id="${esc(b.id)}">
+      <div class="cover" style="${coverStyle(b.title)}"><div class="ct">${esc(b.title.slice(0, 12))}</div>
+      <div class="cs">${b.source === 'pc' ? '我的书' : ''}</div></div>
+      <div class="name">${esc(b.title)}</div><div class="prog">${txt}</div>
+      <button class="del" data-del="${esc(b.id)}">×</button></div>`;
+  }).join('');
+  const last = books.find((b) => progOf(b.id));
+  const rc = $('#recent');
+  if (last) {
+    const p = progOf(last.id);
+    const c = await DB.get('content', last.id);
+    const ct = c && c.chapters[p.c] ? c.chapters[p.c].t : '';
+    rc.innerHTML = `<div class="lbl">继续阅读</div><div class="t">${esc(last.title)}</div><div class="c">${esc(ct)}</div>`;
+    rc.dataset.id = last.id; rc.hidden = false;
+  } else rc.hidden = true;
+}
+
+$('#recent').onclick = (e) => openBook(e.currentTarget.dataset.id);
+$('#books').addEventListener('click', async (e) => {
+  const del = e.target.closest('[data-del]');
+  if (del) {
+    const b = await DB.get('books', del.dataset.del);
+    if (confirm(`从书架删掉《${b.title}》？`)) {
+      await DB.del('books', b.id); await DB.del('content', b.id);
+      localStorage.removeItem('prog:' + b.id);
+      renderShelf();
+    }
+    return;
+  }
+  const bk = e.target.closest('.book');
+  if (bk && !$('#shelf').classList.contains('managing')) openBook(bk.dataset.id);
+});
+$('#btnManage').onclick = (e) => {
+  const on = $('#shelf').classList.toggle('managing');
+  e.currentTarget.textContent = on ? '完成' : '管理';
+  e.currentTarget.classList.toggle('on', on);
+};
+
+/* ---------- 阅读 ---------- */
+const R = { book: null, chapters: [], c: 0 };
+const scroller = $('#scroller');
+
+function chapterHtml(ch) {
+  const out = [];
+  for (let line of ch.x.split('\n')) {
+    line = line.replace(/^[\s　]+|[\s　]+$/g, '');
+    if (!line) continue;
+    if (/^([-*_]\s*){3,}$|^[*＊※◇◆○●☆★·]+(\s*[*＊※◇◆○●☆★·]+)*$/.test(line)) { out.push('<p class="sep">＊　＊　＊</p>'); continue; }
+    line = line.replace(/^#+\s*/, '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1');
+    out.push(`<p>${esc(line)}</p>`);
+  }
+  return out.join('');
+}
+
+function renderChapter(ratio = 0) {
+  const ch = R.chapters[R.c];
+  const last = R.c >= R.chapters.length - 1;
+  $('#content').innerHTML =
+    (ch.v ? `<div class="vol">${esc(ch.v)}</div>` : '') +
+    `<h2>${esc(ch.t)}</h2>` + chapterHtml(ch) +
+    `<div class="end">${last ? '<div class="done">— 已读到最后一章 —</div>' : '<button id="endNext">下一章</button>'}</div>`;
+  $('#readTitle').textContent = R.book.title;
+  $('#infoChap').textContent = ch.t;
+  $('#chapSlider').max = R.chapters.length - 1;
+  $('#chapSlider').value = R.c;
+  const en = $('#endNext'); if (en) en.onclick = (e) => { e.stopPropagation(); goChapter(R.c + 1); };
+  requestAnimationFrame(() => {
+    scroller.scrollTop = ratio * (scroller.scrollHeight - scroller.clientHeight);
+    updateInfo(); saveProgress();
+  });
+}
+
+function curRatio() {
+  const max = scroller.scrollHeight - scroller.clientHeight;
+  return max > 0 ? Math.min(1, scroller.scrollTop / max) : 0;
+}
+function updateInfo() {
+  $('#infoPct').textContent = `${R.c + 1}/${R.chapters.length} 章 · ${Math.round(curRatio() * 100)}%`;
+}
+function saveProgress() {
+  if (!R.book) return;
+  LS.set('prog:' + R.book.id, { c: R.c, r: curRatio(), at: Date.now() });
+}
+let saveT;
+scroller.addEventListener('scroll', () => {
+  updateInfo();
+  clearTimeout(saveT); saveT = setTimeout(saveProgress, 300);
+}, { passive: true });
+
+function goChapter(i, ratio = 0) {
+  if (i < 0 || i >= R.chapters.length) { toast(i < 0 ? '已经是第一章' : '已经是最后一章'); return; }
+  R.c = i; renderChapter(ratio);
+}
+
+async function openBook(id) {
+  const book = await DB.get('books', id);
+  const c = await DB.get('content', id);
+  if (!book || !c) { toast('这本书打不开了'); return; }
+  R.book = book; R.chapters = c.chapters;
+  const p = progOf(id) || { c: 0, r: 0 };
+  R.c = Math.min(p.c, R.chapters.length - 1);
+  $('#shelf').classList.remove('active');
+  $('#reader').classList.add('active');
+  document.body.classList.remove('menu-on');
+  renderChapter(p.r);
+  history.pushState({ reader: 1 }, '');
+}
+function closeBook() {
+  saveProgress();
+  R.book = null;
+  closeToc();
+  $('#reader').classList.remove('active');
+  $('#shelf').classList.add('active');
+  document.body.classList.remove('menu-on');
+  renderShelf();
+}
+$('#btnBack').onclick = () => { if (history.state && history.state.reader) history.back(); else closeBook(); };
+window.addEventListener('popstate', () => { if (R.book) closeBook(); });
+
+// 点按：左三分之一上翻，右三分之一下翻，中间呼出菜单
+scroller.addEventListener('click', (e) => {
+  if (e.target.closest('button')) return;
+  if (document.body.classList.contains('menu-on')) { document.body.classList.remove('menu-on'); return; }
+  const x = e.clientX / window.innerWidth;
+  if (settings.mode === 'tap' && (x < 0.33 || x > 0.67)) {
+    const step = scroller.clientHeight - settings.fs * settings.lh * 1.5;
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    if (x > 0.67) {
+      if (scroller.scrollTop >= max - 2) goChapter(R.c + 1);
+      else scroller.scrollTop = Math.min(max, scroller.scrollTop + step);
+    } else {
+      if (scroller.scrollTop <= 2) { if (R.c > 0) goChapter(R.c - 1, 1); }
+      else scroller.scrollTop = Math.max(0, scroller.scrollTop - step);
+    }
+    return;
+  }
+  document.body.classList.add('menu-on');
+});
+
+$('#btnPrev').onclick = () => goChapter(R.c - 1);
+$('#btnNext').onclick = () => goChapter(R.c + 1);
+$('#chapSlider').oninput = (e) => { $('#infoChap').textContent = R.chapters[+e.target.value].t; };
+$('#chapSlider').onchange = (e) => goChapter(+e.target.value);
+
+function keepRatio(fn) { const r = curRatio(); fn(); requestAnimationFrame(() => { scroller.scrollTop = r * (scroller.scrollHeight - scroller.clientHeight); }); }
+$$('[data-font]').forEach((b) => b.onclick = () => keepRatio(() => {
+  settings.fs = Math.max(13, Math.min(32, settings.fs + +b.dataset.font)); saveSettings();
+}));
+$$('[data-lh]').forEach((b) => b.onclick = () => keepRatio(() => {
+  settings.lh = Math.max(1.3, Math.min(2.6, settings.lh + +b.dataset.lh)); saveSettings();
+}));
+$$('.swatch').forEach((b) => b.onclick = () => { settings.theme = b.dataset.theme; saveSettings(); });
+$('#btnFace').onclick = () => keepRatio(() => { settings.serif = !settings.serif; saveSettings(); });
+$('#btnMode').onclick = () => {
+  settings.mode = settings.mode === 'tap' ? 'scroll' : 'tap'; saveSettings();
+  toast(settings.mode === 'tap' ? '点屏幕左右两边翻页，中间呼出菜单' : '上下滑动阅读，点屏幕呼出菜单');
+};
+
+/* ---------- 目录 ---------- */
+function openToc() {
+  $('#tocBook').textContent = R.book.title;
+  let html = '', vol = null;
+  R.chapters.forEach((ch, i) => {
+    if (ch.v !== vol) { vol = ch.v; if (vol) html += `<li class="vol">${esc(vol)}</li>`; }
+    html += `<li data-i="${i}" class="${i === R.c ? 'cur' : i < R.c ? 'read' : ''}">${esc(ch.t)}</li>`;
+  });
+  $('#tocList').innerHTML = html;
+  document.body.classList.add('toc-open');
+  jumpToc();
+}
+function jumpToc() { const cur = $('#tocList .cur'); if (cur) cur.scrollIntoView({ block: 'center' }); }
+function closeToc() { document.body.classList.remove('toc-open'); }
+$('#btnToc').onclick = openToc;
+$('#tocJump').onclick = jumpToc;
+$('#tocMask').onclick = closeToc;
+$('#tocList').onclick = (e) => {
+  const li = e.target.closest('li[data-i]'); if (!li) return;
+  closeToc(); document.body.classList.remove('menu-on'); goChapter(+li.dataset.i);
+};
+
+/* ---------- 启动 ---------- */
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress(); });
+applySettings();
+renderShelf();
+checkSync(false);
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
