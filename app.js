@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = '15.1.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
+const VERSION = '15.2.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -648,7 +648,9 @@ $('#btnManage').onclick = async () => {
   if (hasKey) items.push({ label: '选择同步哪些书', value: 'pick' });
   items.push({ label: hasKey ? '同步密钥（已设置）' : '设置同步密钥', value: 'key' });
   items.push({ label: '备份全部书（导出 .json）', value: 'all' });
+  items.push({ label: `检查更新（现在是 V${VERSION}）`, value: 'update' });
   const act = await sheet(`书架 · V${VERSION}`, items);
+  if (act === 'update') checkUpdate(true);
   if (act === 'all') exportAll();
   if (act === 'edit') setManaging(true);
   if (act === 'key') askKey();
@@ -970,14 +972,57 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !R.book) { reloaded = true; location.reload(); } });
 }
 
+/* ---------- 检查更新 ---------- */
+// 比版本号：'15.10.0' > '15.2.0'
+function cmpVer(a, b) {
+  const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d; }
+  return 0;
+}
+let lastUpdCheck = 0, newVer = null;
+async function checkUpdate(manual) {
+  if (!manual && Date.now() - lastUpdCheck < 5 * 60000) return;
+  lastUpdCheck = Date.now();
+  if (manual) toast('正在检查更新…', 8000);
+  try {
+    const info = await (await fetch('version.json?t=' + Date.now(), { cache: 'no-store' })).json();
+    if (cmpVer(info.v, VERSION) > 0) {
+      newVer = info;
+      if (manual) { applyUpdate(); return; }
+      showUpdBar();
+    } else if (manual) toast(`已经是最新版 V${VERSION}`);
+  } catch (e) {
+    if (manual) toast('检查不了更新，看看有没有联网');
+  }
+}
+function showUpdBar() {
+  if (!newVer) return;
+  const bar = $('#updBar');
+  bar.innerHTML = `<b>有新版本 V${esc(newVer.v)}</b>${newVer.note ? `<span>${esc(newVer.note)}</span>` : ''}<i>点这里更新</i>`;
+  bar.hidden = false;
+}
+async function applyUpdate() {
+  toast(newVer ? `正在更新到 V${newVer.v}…` : '正在更新…', 8000);
+  saveProgress();
+  try {
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if (reg) await reg.update();
+    for (const k of await caches.keys()) if (k !== 'shufang-fonts') await caches.delete(k); // 字体留着
+  } catch (e) { console.warn(e); }
+  location.reload();
+}
+$('#updBar').onclick = applyUpdate;
+$('#ver').onclick = () => checkUpdate(true);
+
 /* ---------- 启动 ---------- */
-$('#ver').textContent = `书房 V${VERSION}`;
+$('#ver').innerHTML = `书房 V${VERSION} · <u>检查更新</u>`;
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress(); });
 applySettings();
 renderShelf();
 updateSyncBtn();
 migrateChoices().then(() => cloudSync(false));
-document.addEventListener('visibilitychange', () => { if (!document.hidden) cloudSync(false); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { cloudSync(false); checkUpdate(false); } });
+setTimeout(() => checkUpdate(false), 1500);
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
