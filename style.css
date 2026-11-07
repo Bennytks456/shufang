@@ -239,3 +239,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .pm-item.danger { color: #e0403a; }
 .pm-item:active { background: var(--line); }
 .pop-menu.picking { opacity: 0; pointer-events: none; transition: opacity .1s; }
+
+/* 左右滑动换章的动画 */
+.content.slide-next { animation: slideNext .22s ease; }
+.content.slide-prev { animation: slidePrev .22s ease; }
+@keyframes slideNext { from { transform: translateX(48px); opacity: .25; } to { transform: none; opacity: 1; } }
+@keyframes slidePrev { from { transform: translateX(-48px); opacity: .25; } to { transform: none; opacity: 1; } }

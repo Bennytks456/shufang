@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 14;
+const VERSION = 15;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -786,6 +786,7 @@ async function openBook(id) {
   document.body.classList.remove('menu-on');
   renderChapter(p.r);
   history.pushState({ reader: 1 }, '');
+  if (!LS.get('swipeHint', false)) { LS.set('swipeHint', true); setTimeout(() => toast('小提示：左右滑动可以换章', 3000), 600); }
 }
 function closeBook() {
   saveProgress();
@@ -799,6 +800,30 @@ function closeBook() {
 }
 $('#btnBack').onclick = () => { if (history.state && history.state.reader) history.back(); else closeBook(); };
 window.addEventListener('popstate', () => { if (R.book) closeBook(); });
+
+// 左右滑动换章：手指往左滑 = 下一章，往右滑 = 上一章（都从章首读起）
+let swipe = null;
+scroller.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) { swipe = null; return; }
+  const t = e.touches[0];
+  swipe = { x: t.clientX, y: t.clientY, at: Date.now() };
+}, { passive: true });
+scroller.addEventListener('touchend', (e) => {
+  if (!swipe) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - swipe.x, dy = t.clientY - swipe.y, dt = Date.now() - swipe.at;
+  swipe = null;
+  const busy = ['menu-on', 'panel-open', 'toc-open', 'sheet-open'].some((c) => document.body.classList.contains(c));
+  if (busy || dt > 700 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+  const next = dx < 0;
+  const to = R.c + (next ? 1 : -1);
+  if (to < 0 || to >= R.chapters.length) { toast(next ? '已经是最后一章' : '已经是第一章'); return; }
+  goChapter(to, 0);
+  const c = $('#content');
+  c.classList.remove('slide-next', 'slide-prev'); void c.offsetWidth;
+  c.classList.add(next ? 'slide-next' : 'slide-prev');
+}, { passive: true });
+scroller.addEventListener('touchcancel', () => { swipe = null; }, { passive: true });
 
 // 点按：左三分之一上翻，右三分之一下翻，中间呼出菜单
 scroller.addEventListener('click', (e) => {
