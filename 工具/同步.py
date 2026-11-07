@@ -48,12 +48,13 @@ def log(*a):
 
 def main():
     key = get_key()
-    lib = exp.collect()
-    body = json.dumps(lib["books"], ensure_ascii=False, sort_keys=True).encode()
-    digest = hashlib.sha256(body).hexdigest()[:16]
+    scanned = exp.scan()
+    # 先只看修改时间：都没变就不读文件、不上传
+    digest = exp.signature(scanned)
     stamp = HOME / "上次同步.txt"
     if stamp.exists() and stamp.read_text().strip() == digest and "--force" not in sys.argv:
         log("没有变化"); return
+    lib = exp.collect(scanned=scanned)
     if "--dry" in sys.argv:
         log(f"试跑：读到 {len(lib['books'])} 本"); return
     lib["exportedAt"] = int(time.time())

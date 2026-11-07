@@ -57,23 +57,44 @@ def vol_title(d):
     return re.sub(r"[_\s]+", " ", d.name).strip()
 
 
-def collect(verbose=False):
-    books = []
+def scan():
+    """[(书文件夹, [(卷文件夹, 章节文件), ...]), ...]"""
+    out = []
     for book in sorted(DESKTOP.iterdir()):
         if not book.is_dir() or book.name.startswith(".") or book.name in SKIP:
             continue
-        chapters = []
+        files = []
         vols = [d for d in book.iterdir() if d.is_dir() and not d.name.startswith(".")]
         for vol in sorted(vols, key=vol_key):
-            files = [f for f in vol.glob("第*章*.md") if re.match(r"第\d+章", f.name)]
-            for f in sorted(files, key=chap_no):
-                title = re.sub(r"_", " ", f.stem, count=1).replace("_", " ")
-                chapters.append({"t": title, "v": vol_title(vol), "x": clean(f.read_text("utf-8"))})
-        if chapters:
-            h = hashlib.sha256(json.dumps(chapters, ensure_ascii=False).encode()).hexdigest()[:16]
-            books.append({"key": book.name, "title": book.name.replace("_", " "), "h": h, "chapters": chapters})
-            if verbose:
-                print(f"  《{book.name}》 {len(chapters)} 章")
+            chs = [f for f in vol.glob("第*章*.md") if re.match(r"第\d+章", f.name)]
+            files += [(vol, f) for f in sorted(chs, key=chap_no)]
+        if files:
+            out.append((book, files))
+    return out
+
+
+def stamp_of(files):
+    """文件名 + 修改时间 + 大小：只要有一个文件的修改时间变了，结果就变"""
+    sig = [(str(f), f.stat().st_mtime_ns, f.stat().st_size) for _, f in files]
+    return hashlib.sha256(json.dumps(sig, ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def signature(scanned=None):
+    return hashlib.sha256("".join(stamp_of(fs) for _, fs in (scanned or scan())).encode()).hexdigest()[:16]
+
+
+def collect(verbose=False, scanned=None):
+    books = []
+    for book, files in scanned or scan():
+        chapters = []
+        for vol, f in files:
+            title = re.sub(r"_", " ", f.stem, count=1).replace("_", " ")
+            chapters.append({"t": title, "v": vol_title(vol), "x": clean(f.read_text("utf-8"))})
+        # 指纹：修改时间 + 内容，任何一个变了手机都会更新这本书
+        h = hashlib.sha256((stamp_of(files) + json.dumps(chapters, ensure_ascii=False)).encode()).hexdigest()[:16]
+        books.append({"key": book.name, "title": book.name.replace("_", " "), "h": h, "chapters": chapters})
+        if verbose:
+            print(f"  《{book.name}》 {len(chapters)} 章")
     return {"format": "shufang", "exportedAt": int(time.time()), "books": books}
 
 
