@@ -46,13 +46,44 @@ const FONTS = [
   { id: 'sans', name: '思源黑体', css: '"Noto Sans SC", "PingFang SC", sans-serif', href: 'https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap' },
   { id: 'xiaowei', name: '站酷小薇', css: '"ZCOOL XiaoWei", serif', href: 'https://fonts.googleapis.com/css2?family=ZCOOL+XiaoWei&display=swap' },
 ];
+// 英文字体：只管英文字母和数字，中文标点（“”…·）仍用中文字体
+const EN_FONTS = [
+  { id: 'none', name: '跟中文' },
+  { id: 'literata', name: 'Literata', g: 'Literata' },
+  { id: 'lora', name: 'Lora', g: 'Lora' },
+  { id: 'garamond', name: 'EB Garamond', g: 'EB+Garamond' },
+  { id: 'merri', name: 'Merriweather', g: 'Merriweather' },
+  { id: 'sourceserif', name: 'Source Serif', g: 'Source+Serif+4' },
+  { id: 'crimson', name: 'Crimson Pro', g: 'Crimson+Pro' },
+  { id: 'baskerville', name: 'Baskerville', g: 'Libre+Baskerville' },
+  { id: 'inter', name: 'Inter', g: 'Inter' },
+  { id: 'nunito', name: 'Nunito', g: 'Nunito' },
+];
+const EN_RANGE = { latin: 'U+0020-007E, U+00A0-00B6, U+00B8-00FF', 'latin-ext': 'U+0100-024F, U+1E00-1EFF' };
+const enLoaded = new Set();
+async function loadEnFont(f) {
+  if (!f || !f.g || enLoaded.has(f.id)) return;
+  enLoaded.add(f.id);
+  try {
+    const url = `https://fonts.googleapis.com/css2?family=${f.g}:ital,wght@0,400;0,700;1,400&display=swap`;
+    const css = await (await fetch(url)).text();
+    let out = '';
+    for (const m of css.matchAll(/\/\*\s*([\w-]+)\s*\*\/\s*@font-face\s*\{([^}]*)\}/g)) {
+      if (!EN_RANGE[m[1]]) continue;
+      out += '@font-face{' + m[2].replace(/font-family:[^;]+;/, `font-family:'EN-${f.id}';`)
+        .replace(/unicode-range:[^;}]+;?/, `unicode-range:${EN_RANGE[m[1]]};`) + '}\n';
+    }
+    const st = document.createElement('style'); st.textContent = out; document.head.append(st);
+  } catch (e) { enLoaded.delete(f.id); } // 没网：下次再试，先用中文字体里的英文
+}
+
 const THEMES = [
   { id: 'paper', name: '米黄', c: '#f6f1e7' }, { id: 'white', name: '纯白', c: '#ffffff' },
   { id: 'parch', name: '羊皮纸', c: '#e9dcc0' }, { id: 'green', name: '护眼绿', c: '#cfe3c9' },
   { id: 'blue', name: '淡蓝', c: '#dfe8f0' }, { id: 'gray', name: '浅灰', c: '#e4e4e1' },
   { id: 'night', name: '夜间', c: '#16161a', dark: true }, { id: 'black', name: '纯黑', c: '#000000', dark: true },
 ];
-const TYPE_DEFAULTS = { fs: 19, lh: 1.85, pg: 0.7, ls: 0, pad: 22, font: 'serif' };
+const TYPE_DEFAULTS = { fs: 19, lh: 1.85, pg: 0.7, ls: 0, pad: 22, font: 'serif', en: 'none' };
 const DEFAULTS = { ...TYPE_DEFAULTS, theme: 'paper', lastDay: 'paper', auto: true, bright: 100, warm: false, warmLv: 18, mode: 'tap' };
 const savedSettings = LS.get('settings', {});
 const settings = Object.assign({}, DEFAULTS, savedSettings);
@@ -71,13 +102,14 @@ function saveSettings() { LS.set('settings', settings); applySettings(); }
 function applySettings() {
   const st = document.documentElement.style;
   const font = FONTS.find((f) => f.id === settings.font) || FONTS[0];
-  loadFont(font);
+  const en = EN_FONTS.find((f) => f.id === settings.en) || EN_FONTS[0];
+  loadFont(font); loadEnFont(en);
   st.setProperty('--fs', settings.fs + 'px');
   st.setProperty('--lh', settings.lh.toFixed(2));
   st.setProperty('--pg', settings.pg + 'em');
   st.setProperty('--ls', settings.ls + 'em');
   st.setProperty('--pad', settings.pad + 'px');
-  st.setProperty('--face', font.css);
+  st.setProperty('--face', (en.g ? `"EN-${en.id}", ` : '') + font.css);
   document.body.dataset.theme = effTheme();
   $('#dim').style.opacity = (1 - settings.bright / 100).toFixed(2);
   $('#warm').style.opacity = settings.warm ? (settings.warmLv / 100).toFixed(2) : '0';
@@ -218,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 8;
+const VERSION = 9;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -712,6 +744,7 @@ function syncPanel() {
   $('#sWarmLv').value = settings.warmLv; $('#sWarmLv').disabled = !settings.warm;
   $('#sAuto').checked = settings.auto;
   $('#fontList').innerHTML = FONTS.map((f) => `<button data-f="${f.id}" class="${f.id === settings.font ? 'on' : ''}" style='font-family:${f.css}'>${f.name}</button>`).join('');
+  $('#enList').innerHTML = EN_FONTS.map((f) => `<button data-en="${f.id}" class="${f.id === settings.en ? 'on' : ''}" style='font-family:${f.g ? `"EN-${f.id}", ` : ''}-apple-system, sans-serif'>${f.name}</button>`).join('');
   $('#themeList').innerHTML = THEMES.map((t) => `<button data-t="${t.id}" class="${t.id === settings.theme ? 'on' : ''}" style="background:${t.c}"><span>${t.name}</span></button>`).join('');
   $$('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === settings.mode));
   const dark = isDark(effTheme());
@@ -736,6 +769,10 @@ $('#fontList').onclick = (e) => {
   const b = e.target.closest('[data-f]'); if (!b) return;
   keepSave(() => { settings.font = b.dataset.f; });
 };
+$('#enList').onclick = (e) => {
+  const b = e.target.closest('[data-en]'); if (!b) return;
+  keepSave(() => { settings.en = b.dataset.en; });
+};
 $('#themeList').onclick = (e) => {
   const b = e.target.closest('[data-t]'); if (!b) return;
   settings.theme = b.dataset.t;
@@ -753,7 +790,7 @@ function openPanel(which) {
   document.body.classList.remove('menu-on');
   $('#pLight').hidden = which !== 'light';
   $('#pType').hidden = which !== 'type';
-  if (which === 'type') FONTS.forEach(loadFont); // 让字体按钮显示各自的字形
+  if (which === 'type') { FONTS.forEach(loadFont); EN_FONTS.forEach(loadEnFont); } // 让字体按钮显示各自的字形
   document.body.classList.add('panel-open');
 }
 function closePanel() { document.body.classList.remove('panel-open'); }
