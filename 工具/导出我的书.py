@@ -3,6 +3,7 @@
 
 规则：桌面上每个文件夹算一本书，书里的子文件夹算一卷，
 卷里文件名以「第xx章」开头的 .md 算一章。以 . 开头的文件夹（如 .草稿）不读。
+写在「不同步的书.txt」里的书不导出，手机上已有的会被移除。
 """
 import hashlib, json, re, sys, time
 from pathlib import Path
@@ -10,6 +11,24 @@ from pathlib import Path
 DESKTOP = Path.home() / "Desktop"
 OUT = Path(__file__).resolve().parent.parent / "library.json"
 SKIP = {"Claude"}
+EXCLUDE_FILE = Path(__file__).resolve().parent.parent / "不同步的书.txt"
+
+
+def excluded():
+    """不同步的书：一行一个文件夹名，# 开头是说明"""
+    if not EXCLUDE_FILE.exists():
+        return []
+    names = []
+    for line in EXCLUDE_FILE.read_text("utf-8").splitlines():
+        line = line.strip().strip("《》").strip()
+        if line and not line.startswith("#"):
+            names.append(line)
+    return names
+
+
+def is_excluded(name, ex):
+    norm = lambda s: re.sub(r"[_\s]+", "", s)
+    return any(norm(name) == norm(e) for e in ex)
 CN = {c: i for i, c in enumerate("零一二三四五六七八九")}
 
 
@@ -59,9 +78,9 @@ def vol_title(d):
 
 def scan():
     """[(书文件夹, [(卷文件夹, 章节文件), ...]), ...]"""
-    out = []
+    out, ex = [], excluded()
     for book in sorted(DESKTOP.iterdir()):
-        if not book.is_dir() or book.name.startswith(".") or book.name in SKIP:
+        if not book.is_dir() or book.name.startswith(".") or book.name in SKIP or is_excluded(book.name, ex):
             continue
         files = []
         vols = [d for d in book.iterdir() if d.is_dir() and not d.name.startswith(".")]
@@ -79,8 +98,15 @@ def stamp_of(files):
     return hashlib.sha256(json.dumps(sig, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
+def excluded_keys():
+    """桌面上被设为不同步的书文件夹名（手机靠这个把它们从书架移除）"""
+    ex = excluded()
+    return sorted(d.name for d in DESKTOP.iterdir() if d.is_dir() and is_excluded(d.name, ex))
+
+
 def signature(scanned=None):
-    return hashlib.sha256("".join(stamp_of(fs) for _, fs in (scanned or scan())).encode()).hexdigest()[:16]
+    parts = [stamp_of(fs) for _, fs in (scanned or scan())] + ["不同步:" + "|".join(excluded_keys())]
+    return hashlib.sha256("".join(parts).encode()).hexdigest()[:16]
 
 
 def collect(verbose=False, scanned=None):
@@ -95,7 +121,7 @@ def collect(verbose=False, scanned=None):
         books.append({"key": book.name, "title": book.name.replace("_", " "), "h": h, "chapters": chapters})
         if verbose:
             print(f"  《{book.name}》 {len(chapters)} 章")
-    return {"format": "shufang", "exportedAt": int(time.time()), "books": books}
+    return {"format": "shufang", "exportedAt": int(time.time()), "books": books, "excluded": excluded_keys()}
 
 
 def main():

@@ -189,7 +189,7 @@ async function saveBook(meta, chapters) {
 }
 
 const hiddenPc = () => LS.get('hiddenPc', []);
-const VERSION = 4;
+const VERSION = 5;
 
 // cloud=true：自动同步，跳过手机上删掉的书；false：手动导入，全部放回书架
 async function importLibrary(lib, cloud) {
@@ -207,6 +207,13 @@ async function importLibrary(lib, cloud) {
     const added = old ? b.chapters.length - old.count : 0;
     await saveBook({ id, title: b.title, source: 'pc', size, h: b.h, addedAt: old ? old.addedAt : Date.now() }, b.chapters);
     changed.push(old ? (added > 0 ? `《${b.title}》+${added} 章` : `《${b.title}》有改动`) : `新书《${b.title}》`);
+  }
+  // 电脑上设为「不同步」的书：从书架移除，阅读进度留着
+  for (const k of lib.excluded || []) {
+    const b = books.find((x) => x.id === 'pc:' + k);
+    if (!b) continue;
+    await DB.del('books', b.id); await DB.del('content', b.id);
+    changed.push(`《${b.title}》设为不同步，已移出书架`);
   }
   if (changed.length) toast('已同步：' + changed.join('，'), 3500);
   else if (!cloud) toast('书都是最新的');
@@ -416,21 +423,22 @@ async function bookMenu(id) {
   if (act === 'del') deleteBook(b);
 }
 
-// 长按书本弹菜单
-let pressT = null, pressed = false;
+// 长按书本弹菜单（menuAt：刚弹过菜单，紧跟着的那次点击不算点书）
+let pressT = null, menuAt = 0;
 $('#books').addEventListener('touchstart', (e) => {
   const bk = e.target.closest('.book'); if (!bk) return;
-  pressed = false;
-  pressT = setTimeout(() => { pressed = true; if (navigator.vibrate) navigator.vibrate(10); bookMenu(bk.dataset.id); }, 450);
+  clearTimeout(pressT);
+  pressT = setTimeout(() => { menuAt = Date.now(); if (navigator.vibrate) navigator.vibrate(10); bookMenu(bk.dataset.id); }, 450);
 }, { passive: true });
 ['touchend', 'touchmove', 'touchcancel'].forEach((t) => $('#books').addEventListener(t, () => clearTimeout(pressT), { passive: true }));
 $('#books').addEventListener('contextmenu', (e) => {
   const bk = e.target.closest('.book'); if (!bk) return;
-  e.preventDefault(); if (!pressed) bookMenu(bk.dataset.id); pressed = true;
+  e.preventDefault();
+  if (Date.now() - menuAt > 800) { menuAt = Date.now(); bookMenu(bk.dataset.id); }
 });
 
 $('#books').addEventListener('click', async (e) => {
-  if (pressed) { pressed = false; return; }
+  if (Date.now() - menuAt < 800) return;
   const del = e.target.closest('[data-del]');
   if (del) { const b = await DB.get('books', del.dataset.del); if (b) deleteBook(b); return; }
   const bk = e.target.closest('.book');
@@ -449,8 +457,23 @@ $('#btnManage').onclick = async () => {
   if (act === 'all') exportAll();
   if (act === 'edit') setManaging(true);
   if (act === 'key') askKey();
-  if (act === 'restore') { LS.set('hiddenPc', []); LS.set('cloudVer', ''); cloudSync(true); }
+  if (act === 'restore') restoreMenu();
 };
+const keyTitle = (k) => k.replace(/_/g, ' ');
+async function restoreMenu() {
+  const hidden = hiddenPc();
+  const items = hidden.map((k) => ({ label: `《${keyTitle(k)}》`, value: [k] }));
+  if (hidden.length > 1) items.push({ label: `全部找回（${hidden.length} 本）`, value: hidden });
+  const keys = await sheet('找回哪一本？', items);
+  if (!keys) return;
+  LS.set('hiddenPc', hidden.filter((k) => !keys.includes(k)));
+  LS.set('cloudVer', '');
+  await cloudSync(true);
+  const gone = [];
+  for (const k of keys) if (!(await DB.get('books', 'pc:' + k))) gone.push(`《${keyTitle(k)}》`);
+  if (gone.length) toast(`${gone.join('、')} 电脑上已经没有了，或者设成了不同步`, 3500);
+}
+
 function setManaging(on) {
   $('#shelf').classList.toggle('managing', on);
   $('#btnDone').hidden = !on; $('#btnManage').hidden = on;

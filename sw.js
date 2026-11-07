@@ -1,5 +1,5 @@
 // 离线缓存：联网时先拿最新版（3 秒拿不到就用缓存），断网时用缓存
-const CACHE = 'shufang-v4';
+const CACHE = 'shufang-v5';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'zip.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
