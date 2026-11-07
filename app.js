@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 13;
+const VERSION = 14;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -513,6 +513,7 @@ function popMenu(anchor, title, items) {
       if (finished) return; finished = true;
       document.body.classList.remove('pop-open');
       if (anchor) anchor.classList.remove('lift');
+      menu.classList.remove('picking');
       mask.onclick = null; menu.onclick = null; $('#shelf').onscroll = null;
       done(v);
     };
@@ -521,10 +522,12 @@ function popMenu(anchor, title, items) {
       const it = items[+inp.parentElement.dataset.i];
       inp.addEventListener('change', () => finish(inp.files[0] ? { value: it.value, file: inp.files[0] } : null));
       inp.addEventListener('cancel', () => finish(null));
+      inp.parentElement.addEventListener('click', () => menu.classList.add('picking'));
     });
     mask.onclick = () => finish(null);
     $('#shelf').onscroll = () => finish(null);
     // 摆在书的正下方；下面放不下就放上面
+    menu.classList.remove('picking');
     document.body.classList.add('pop-open');
     if (anchor) anchor.classList.add('lift');
     const r = anchor ? (anchor.querySelector('.cover') || anchor).getBoundingClientRect() : null;
@@ -599,7 +602,7 @@ async function bookMenu(id) {
   const items = [{ label: '阅读', value: 'read' }];
   if (b.upd && b.upd.length) items.push({ label: `去掉更新红点（${b.upd.length} 章有更新）`, value: 'seen' });
   const cv = await DB.get('covers', id);
-  items.push({ label: '换封面', value: 'cover', file: true });
+  items.push({ label: '封面', value: 'cover', file: true });
   if (cv && cv.phone) items.push({ label: cv.pc ? '换回电脑上的封面' : '恢复默认封面', value: 'uncover' });
   items.push({ label: '导出 txt', value: 'export' }, { label: '删除', value: 'del', danger: true });
   const bookEl = $$('#books .book').find((x) => x.dataset.id === id);
