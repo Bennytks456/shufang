@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 11;
+const VERSION = 12;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -445,16 +445,26 @@ async function renderShelf() {
 $('#recent').onclick = (e) => openBook(e.currentTarget.dataset.id);
 
 /* 底部弹出菜单（不用系统 confirm，手机主屏 APP 里更可靠） */
+let releaseSheet = () => {};
 function sheet(title, items) {
   return new Promise((done) => {
     const box = $('#sheet');
     box.querySelector('.sheet-title').textContent = title;
     const list = box.querySelector('.sheet-list');
     list.innerHTML = items.map((it, i) => `<button data-i="${i}" class="${it.danger ? 'danger' : ''}">${esc(it.label)}</button>`).join('');
-    const close = (v) => { document.body.classList.remove('sheet-open'); box.onclick = null; done(v); };
+    const close = (v) => { document.body.classList.remove('sheet-open'); box.onclick = null; releaseSheet = () => {}; done(v); };
     box.onclick = (e) => {
       const b = e.target.closest('button[data-i]');
-      if (b) { const it = items[+b.dataset.i]; if (it.now) it.now(); close(it.value); }
+      if (b) {
+        const it = items[+b.dataset.i];
+        if (it.now) it.now();
+        if (it.hold) { // 先不收：让 iPhone 的选图菜单贴着这一行弹出
+          list.querySelectorAll('button').forEach((x) => x.classList.toggle('held', x === b));
+          releaseSheet = () => close(it.value);
+          return;
+        }
+        close(it.value);
+      }
       else if (e.target.closest('.sheet-cancel') || e.target === box) close(null);
     };
     document.body.classList.add('sheet-open');
@@ -489,15 +499,9 @@ async function makeCover(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 let coverTarget = null;
-// 选图菜单会贴着这个输入框弹出：先把它挪到那本书的封面上
-function openCoverPicker(id) {
-  const inp = $('#coverInput');
-  const book = [...$$('#books .book')].find((b) => b.dataset.id === id);
-  const r = (book && book.querySelector('.cover') || $('#books')).getBoundingClientRect();
-  Object.assign(inp.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
-  inp.click();
-}
+$('#coverInput').addEventListener('cancel', () => releaseSheet());
 $('#coverInput').addEventListener('change', async (e) => {
+  releaseSheet();
   const f = e.target.files[0]; e.target.value = '';
   if (!f || !coverTarget) return;
   try {
@@ -564,7 +568,7 @@ async function bookMenu(id) {
   const items = [{ label: '阅读', value: 'read' }];
   if (b.upd && b.upd.length) items.push({ label: `去掉更新红点（${b.upd.length} 章有更新）`, value: 'seen' });
   const cv = await DB.get('covers', id);
-  items.push({ label: '换封面', value: 'cover', now: () => { coverTarget = id; openCoverPicker(id); } });
+  items.push({ label: '换封面', value: 'cover', hold: true, now: () => { coverTarget = id; $('#coverInput').click(); } });
   if (cv && cv.phone) items.push({ label: cv.pc ? '换回电脑上的封面' : '恢复默认封面', value: 'uncover' });
   items.push({ label: '导出 txt', value: 'export' }, { label: '删除', value: 'del', danger: true });
   const act = await sheet(`《${b.title}》 · ${b.count} 章`, items);
