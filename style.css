@@ -220,3 +220,21 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .anchor-input { position: fixed; left: 50%; top: 50%; width: 1px; height: 1px; opacity: 0; pointer-events: none; z-index: -1; }
 
 .sheet-list button.held { background: var(--line); }
+
+/* 书下方的小菜单 */
+.pop-mask { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.28); display: none;
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+.pop-menu { position: fixed; z-index: 32; display: none; background: var(--panel); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0,0,0,.25); animation: popin .16s ease; transform-origin: top center; }
+.pop-menu.above { transform-origin: bottom center; }
+@keyframes popin { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+.pop-open .pop-mask, .pop-open .pop-menu { display: block; }
+.book.lift { z-index: 31; }
+.book.lift .cover { transform: scale(1.04); transition: transform .16s ease; box-shadow: 0 8px 22px rgba(0,0,0,.3); }
+.pm-title { padding: 10px 14px; font-size: 12px; color: var(--sub); border-bottom: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-item { display: block; width: 100%; text-align: left; padding: 12px 16px; font-size: 16px; color: var(--fg);
+  border-bottom: 1px solid var(--line); cursor: pointer; }
+.pm-item:last-child { border-bottom: 0; }
+.pm-item.danger { color: #e0403a; }
+.pm-item:active { background: var(--line); }

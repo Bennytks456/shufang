@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 12;
+const VERSION = 13;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -498,17 +498,48 @@ async function makeCover(file) {
     return cv.toDataURL('image/jpeg', 0.85);
   } finally { URL.revokeObjectURL(url); }
 }
-let coverTarget = null;
-$('#coverInput').addEventListener('cancel', () => releaseSheet());
-$('#coverInput').addEventListener('change', async (e) => {
-  releaseSheet();
-  const f = e.target.files[0]; e.target.value = '';
-  if (!f || !coverTarget) return;
-  try {
-    await setCover(coverTarget, 'phone', await makeCover(f));
-    toast('封面换好了'); renderShelf();
-  } catch (err) { console.error(err); toast('这张图打不开，换一张试试'); }
-});
+
+/* 书下方的小菜单（长按书本）。
+   iPhone 的选图菜单总是在手指点的地方弹出，所以「换封面」直接做成这里的选文件按钮，
+   选图菜单就会出现在书的下方。 */
+function popMenu(anchor, title, items) {
+  return new Promise((done) => {
+    const mask = $('#popMask'), menu = $('#popMenu');
+    menu.innerHTML = `<div class="pm-title">${esc(title)}</div>` + items.map((it, i) => it.file
+      ? `<label class="pm-item" data-i="${i}">${esc(it.label)}<input type="file" accept="image/*" hidden></label>`
+      : `<button class="pm-item${it.danger ? ' danger' : ''}" data-i="${i}">${esc(it.label)}</button>`).join('');
+    let finished = false;
+    const finish = (v) => {
+      if (finished) return; finished = true;
+      document.body.classList.remove('pop-open');
+      if (anchor) anchor.classList.remove('lift');
+      mask.onclick = null; menu.onclick = null; $('#shelf').onscroll = null;
+      done(v);
+    };
+    menu.onclick = (e) => { const b = e.target.closest('button.pm-item'); if (b) finish({ value: items[+b.dataset.i].value }); };
+    menu.querySelectorAll('input[type=file]').forEach((inp) => {
+      const it = items[+inp.parentElement.dataset.i];
+      inp.addEventListener('change', () => finish(inp.files[0] ? { value: it.value, file: inp.files[0] } : null));
+      inp.addEventListener('cancel', () => finish(null));
+    });
+    mask.onclick = () => finish(null);
+    $('#shelf').onscroll = () => finish(null);
+    // 摆在书的正下方；下面放不下就放上面
+    document.body.classList.add('pop-open');
+    if (anchor) anchor.classList.add('lift');
+    const r = anchor ? (anchor.querySelector('.cover') || anchor).getBoundingClientRect() : null;
+    const vw = innerWidth, vh = innerHeight, mw = Math.min(240, vw - 24);
+    menu.style.width = mw + 'px';
+    const mh = menu.offsetHeight;
+    let left = r ? r.left + r.width / 2 - mw / 2 : (vw - mw) / 2;
+    left = clamp(left, 12, vw - mw - 12);
+    let top = r ? r.bottom + 10 : (vh - mh) / 2;
+    if (r && top + mh > vh - 24) top = r.top - 10 - mh;
+    top = clamp(top, 24, Math.max(24, vh - mh - 24));
+    menu.style.left = left + 'px'; menu.style.top = top + 'px';
+    menu.classList.toggle('above', !!r && top < r.top);
+  });
+}
 
 async function confirmDelete(b) {
   const pc = b.source === 'pc';
@@ -568,10 +599,16 @@ async function bookMenu(id) {
   const items = [{ label: '阅读', value: 'read' }];
   if (b.upd && b.upd.length) items.push({ label: `去掉更新红点（${b.upd.length} 章有更新）`, value: 'seen' });
   const cv = await DB.get('covers', id);
-  items.push({ label: '换封面', value: 'cover', hold: true, now: () => { coverTarget = id; $('#coverInput').click(); } });
+  items.push({ label: '换封面', value: 'cover', file: true });
   if (cv && cv.phone) items.push({ label: cv.pc ? '换回电脑上的封面' : '恢复默认封面', value: 'uncover' });
   items.push({ label: '导出 txt', value: 'export' }, { label: '删除', value: 'del', danger: true });
-  const act = await sheet(`《${b.title}》 · ${b.count} 章`, items);
+  const bookEl = $$('#books .book').find((x) => x.dataset.id === id);
+  const res = await popMenu(bookEl, `《${b.title}》 · ${b.count} 章`, items);
+  const act = res && res.value;
+  if (act === 'cover') {
+    try { await setCover(id, 'phone', await makeCover(res.file)); toast('封面换好了'); renderShelf(); }
+    catch (err) { console.error(err); toast('这张图打不开，换一张试试'); }
+  }
   if (act === 'uncover') { await setCover(id, 'phone', null); renderShelf(); }
   if (act === 'read') openBook(id);
   if (act === 'seen') { await clearUpd(b, b.upd.slice()); renderShelf(); }
