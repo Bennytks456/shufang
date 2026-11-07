@@ -2,10 +2,10 @@
 """把桌面上各本书的正文打包成 library.json，给「书房」APP 用。
 
 规则：桌面上每个文件夹算一本书，书里的子文件夹算一卷，
-卷里文件名以「第xx章」开头的 .md 算一章。以 . 开头的文件夹（如 .草稿）不读。
+卷里文件名以「第xx章」开头的 .md 算一章。书文件夹里的「封面.jpg/png」（或 cover.jpg）会当封面。以 . 开头的文件夹（如 .草稿）不读。
 写在「不同步的书.txt」里的书不导出，手机上已有的会被移除。
 """
-import hashlib, json, re, sys, time
+import base64, hashlib, json, re, subprocess, sys, tempfile, time
 from pathlib import Path
 
 DESKTOP = Path.home() / "Desktop"
@@ -92,6 +92,31 @@ def scan():
     return out
 
 
+COVER_NAMES = {"封面", "cover"}
+COVER_EXT = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
+
+
+def cover_file(book):
+    for f in sorted(book.iterdir()):
+        if f.is_file() and f.stem.lower() in COVER_NAMES and f.suffix.lower() in COVER_EXT:
+            return f
+    return None
+
+
+def cover_stamp(book):
+    f = cover_file(book)
+    return f"{f.name}:{f.stat().st_mtime_ns}:{f.stat().st_size}" if f else ""
+
+
+def cover_data(f):
+    """缩到最长边 900，转成 jpg，给手机用"""
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "c.jpg"
+        subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "82", "-Z", "900", str(f), "--out", str(out)],
+                       check=True, capture_output=True)
+        return "data:image/jpeg;base64," + base64.b64encode(out.read_bytes()).decode()
+
+
 def stamp_of(files):
     """文件名 + 修改时间 + 大小：只要有一个文件的修改时间变了，结果就变"""
     sig = [(str(f), f.stat().st_mtime_ns, f.stat().st_size) for _, f in files]
@@ -105,7 +130,7 @@ def excluded_keys():
 
 
 def signature(scanned=None):
-    parts = [stamp_of(fs) for _, fs in (scanned or scan())] + ["不同步:" + "|".join(excluded_keys())]
+    parts = [stamp_of(fs) + cover_stamp(b) for b, fs in (scanned or scan())] + ["不同步:" + "|".join(excluded_keys())]
     return hashlib.sha256("".join(parts).encode()).hexdigest()[:16]
 
 
@@ -117,8 +142,15 @@ def collect(verbose=False, scanned=None):
             title = re.sub(r"_", " ", f.stem, count=1).replace("_", " ")
             chapters.append({"t": title, "v": vol_title(vol), "x": clean(f.read_text("utf-8"))})
         # 指纹：修改时间 + 内容，任何一个变了手机都会更新这本书
-        h = hashlib.sha256((stamp_of(files) + json.dumps(chapters, ensure_ascii=False)).encode()).hexdigest()[:16]
-        books.append({"key": book.name, "title": book.name.replace("_", " "), "h": h, "chapters": chapters})
+        h = hashlib.sha256((stamp_of(files) + cover_stamp(book) + json.dumps(chapters, ensure_ascii=False)).encode()).hexdigest()[:16]
+        entry = {"key": book.name, "title": book.name.replace("_", " "), "h": h, "chapters": chapters}
+        cf = cover_file(book)
+        if cf:
+            try:
+                entry["cover"] = cover_data(cf)
+            except Exception as e:
+                print("封面转换失败：", cf, e)
+        books.append(entry)
         if verbose:
             print(f"  《{book.name}》 {len(chapters)} 章")
     return {"format": "shufang", "exportedAt": int(time.time()), "books": books, "excluded": excluded_keys()}

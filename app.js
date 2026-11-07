@@ -7,10 +7,10 @@ const DB = (() => {
   let dbp;
   function open() {
     if (!dbp) dbp = new Promise((ok, no) => {
-      const r = indexedDB.open('shufang', 1);
+      const r = indexedDB.open('shufang', 2);
       r.onupgradeneeded = () => {
-        r.result.createObjectStore('books', { keyPath: 'id' });
-        r.result.createObjectStore('content', { keyPath: 'id' });
+        const db = r.result;
+        for (const s of ['books', 'content', 'covers']) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: 'id' });
       };
       r.onsuccess = () => ok(r.result);
       r.onerror = () => no(r.error);
@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 9;
+const VERSION = 10;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -293,8 +293,9 @@ async function importLibrary(lib, cloud) {
     }
     const meta = { id, title: b.title, source: 'pc', size, h: b.h, upd, addedAt: old ? old.addedAt : Date.now() };
     await saveBook(meta, b.chapters);
+    const coverChanged = await syncPcCover(id, b.cover);
     if (R.book && R.book.id === id) { R.chapters = b.chapters; R.book = meta; }
-    if (!diffs) continue; // 只是修改时间变了，内容一样：不提示
+    if (!diffs) { if (coverChanged && old) changed.push(`《${b.title}》换了封面`); continue; } // 内容一样：只提示封面
     changed.push(old ? (added > 0 ? `《${b.title}》+${added} 章` : `《${b.title}》有改动`) : `新书《${b.title}》`);
   }
   // 电脑上设为「不同步」的书：从书架移除，阅读进度留着
@@ -416,14 +417,16 @@ async function renderShelf() {
   books.sort((a, b) => { const x = key(a), y = key(b); return y[0] - x[0] || y[1] - x[1]; });
   $('#empty').hidden = books.length > 0;
   $('#emptyBtn').textContent = LS.get('syncKey', '') ? '选择要同步的书' : '填同步密钥，拿电脑上的书';
+  const covers = Object.fromEntries((await DB.all('covers')).map((c) => [c.id, c.phone || c.pc]));
   $('#books').innerHTML = books.map((b) => {
     const p = progOf(b.id);
     const unread = p ? Math.max(0, b.count - p.c - 1) : b.count;
     const txt = unread ? `${unread} 章未读` : '已读完';
     const dot = b.upd && b.upd.length ? '<i class="dot"></i>' : '';
     return `<div class="book" data-id="${esc(b.id)}">
-      <div class="cover" style="${coverStyle(b.title)}">${dot}<div class="ct">${esc(b.title.slice(0, 12))}</div>
-      <div class="cs">${b.source === 'pc' ? '我的书' : ''}</div></div>
+      ${covers[b.id] ? `<div class="cover img" style="background-image:url(${covers[b.id]})">${dot}</div>`
+        : `<div class="cover" style="${coverStyle(b.title)}">${dot}<div class="ct">${esc(b.title.slice(0, 12))}</div>
+      <div class="cs">${b.source === 'pc' ? '我的书' : ''}</div></div>`}
       <div class="name">${esc(b.title)}</div><div class="prog${unread && p ? ' unread' : ''}">${txt}</div>
       <button class="del" data-del="${esc(b.id)}">×</button></div>`;
   }).join('');
@@ -451,12 +454,49 @@ function sheet(title, items) {
     const close = (v) => { document.body.classList.remove('sheet-open'); box.onclick = null; done(v); };
     box.onclick = (e) => {
       const b = e.target.closest('button[data-i]');
-      if (b) close(items[+b.dataset.i].value);
+      if (b) { const it = items[+b.dataset.i]; if (it.now) it.now(); close(it.value); }
       else if (e.target.closest('.sheet-cancel') || e.target === box) close(null);
     };
     document.body.classList.add('sheet-open');
   });
 }
+
+/* ---------- 封面 ----------
+   covers 表：{ id, pc: 电脑带来的, phone: 手机上换的 }，显示时手机的优先 */
+async function setCover(id, field, data) {
+  const c = (await DB.get('covers', id)) || { id };
+  if (data) c[field] = data; else delete c[field];
+  if (c.pc || c.phone) await DB.put('covers', c); else await DB.del('covers', id);
+}
+// 电脑同步来的封面，返回有没有变
+async function syncPcCover(id, data) {
+  const c = await DB.get('covers', id);
+  if ((c && c.pc) === (data || undefined)) return false;
+  await setCover(id, 'pc', data);
+  return !(c && c.phone); // 手机上自己换过的，就看不出变化
+}
+async function makeCover(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    const W = 600, H = 800, ratio = W / H;
+    let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+    if (sw / sh > ratio) { const nw = sh * ratio; sx = (sw - nw) / 2; sw = nw; }
+    else { const nh = sw / ratio; sy = (sh - nh) / 2; sh = nh; }
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+    return cv.toDataURL('image/jpeg', 0.85);
+  } finally { URL.revokeObjectURL(url); }
+}
+let coverTarget = null;
+$('#coverInput').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f || !coverTarget) return;
+  try {
+    await setCover(coverTarget, 'phone', await makeCover(f));
+    toast('封面换好了'); renderShelf();
+  } catch (err) { console.error(err); toast('这张图打不开，换一张试试'); }
+});
 
 async function confirmDelete(b) {
   const pc = b.source === 'pc';
@@ -465,7 +505,7 @@ async function confirmDelete(b) {
   const ok = await sheet(msg, [{ label: '删除', value: 1, danger: true }]);
   if (!ok) return false;
   await DB.del('books', b.id); await DB.del('content', b.id);
-  if (pc) setChoice(b.id.slice(3), false); else localStorage.removeItem('prog:' + b.id);
+  if (pc) setChoice(b.id.slice(3), false); else { localStorage.removeItem('prog:' + b.id); await DB.del('covers', b.id); }
   toast(`已删除《${b.title}》`);
   return true;
 }
@@ -515,8 +555,12 @@ async function bookMenu(id) {
   if (!b) return;
   const items = [{ label: '阅读', value: 'read' }];
   if (b.upd && b.upd.length) items.push({ label: `去掉更新红点（${b.upd.length} 章有更新）`, value: 'seen' });
+  const cv = await DB.get('covers', id);
+  items.push({ label: '换封面', value: 'cover', now: () => { coverTarget = id; $('#coverInput').click(); } });
+  if (cv && cv.phone) items.push({ label: cv.pc ? '换回电脑上的封面' : '恢复默认封面', value: 'uncover' });
   items.push({ label: '导出 txt', value: 'export' }, { label: '删除', value: 'del', danger: true });
   const act = await sheet(`《${b.title}》 · ${b.count} 章`, items);
+  if (act === 'uncover') { await setCover(id, 'phone', null); renderShelf(); }
   if (act === 'read') openBook(id);
   if (act === 'seen') { await clearUpd(b, b.upd.slice()); renderShelf(); }
   if (act === 'export') exportBook(b);
