@@ -130,8 +130,29 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .keybox { width: 86%; max-width: 360px; background: var(--panel); border-radius: 16px; padding: 20px 18px 12px; }
 .keytitle { font-size: 18px; font-weight: 600; text-align: center; }
 .keysub { font-size: 13px; color: var(--sub); margin: 8px 0 14px; line-height: 1.5; }
-.keybox input { width: 100%; font-size: 17px; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line);
+.keybox input[type=text] { width: 100%; font-size: 17px; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line);
   background: var(--bg); color: var(--fg); font-family: ui-monospace, Menlo, monospace; letter-spacing: 1px; }
 .keybtns { display: flex; margin-top: 12px; }
 .keybtns button { flex: 1; padding: 12px; font-size: 17px; color: #2f7de1; }
 .keybtns .ok { font-weight: 600; }
+
+/* 选择同步哪些书 */
+.pickdlg { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.35); display: none;
+  align-items: center; justify-content: center; }
+.pick-open .pickdlg { display: flex; }
+.picklist { max-height: 52vh; overflow-y: auto; margin: 0 -4px; }
+.pickrow { display: flex; align-items: center; justify-content: space-between; padding: 12px 4px;
+  border-bottom: 1px solid var(--line); }
+.pickrow .pt { font-size: 16px; }
+.pickrow em { font-style: normal; font-size: 11px; color: #fff; background: var(--accent); border-radius: 8px;
+  padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
+.pickrow small { display: block; font-size: 12px; color: var(--sub); margin-top: 2px; }
+.pickempty { color: var(--sub); text-align: center; padding: 20px 0; font-size: 14px; }
+.sw { appearance: none; -webkit-appearance: none; width: 50px; height: 30px; border-radius: 15px; background: rgba(120,120,128,.32);
+  position: relative; transition: background .2s; flex: none; margin: 0; }
+.sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 26px; height: 26px; border-radius: 13px;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .2s; }
+.sw:checked { background: #34c759; }
+.sw:checked::after { transform: translateX(20px); }
+.keybtns button { font-size: 16px; }
+.pickrow .pt { flex: 1; min-width: 0; padding-right: 12px; }
