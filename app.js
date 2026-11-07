@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 10;
+const VERSION = 11;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -489,6 +489,14 @@ async function makeCover(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 let coverTarget = null;
+// 选图菜单会贴着这个输入框弹出：先把它挪到那本书的封面上
+function openCoverPicker(id) {
+  const inp = $('#coverInput');
+  const book = [...$$('#books .book')].find((b) => b.dataset.id === id);
+  const r = (book && book.querySelector('.cover') || $('#books')).getBoundingClientRect();
+  Object.assign(inp.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  inp.click();
+}
 $('#coverInput').addEventListener('change', async (e) => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f || !coverTarget) return;
@@ -556,7 +564,7 @@ async function bookMenu(id) {
   const items = [{ label: '阅读', value: 'read' }];
   if (b.upd && b.upd.length) items.push({ label: `去掉更新红点（${b.upd.length} 章有更新）`, value: 'seen' });
   const cv = await DB.get('covers', id);
-  items.push({ label: '换封面', value: 'cover', now: () => { coverTarget = id; $('#coverInput').click(); } });
+  items.push({ label: '换封面', value: 'cover', now: () => { coverTarget = id; openCoverPicker(id); } });
   if (cv && cv.phone) items.push({ label: cv.pc ? '换回电脑上的封面' : '恢复默认封面', value: 'uncover' });
   items.push({ label: '导出 txt', value: 'export' }, { label: '删除', value: 'del', danger: true });
   const act = await sheet(`《${b.title}》 · ${b.count} 章`, items);

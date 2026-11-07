@@ -215,3 +215,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .fontlist.en button { font-size: 15px; padding: 6px 11px; }
 
 .cover.img { background-size: cover; background-position: center; padding: 0; }
+
+/* 看不见但有位置的选文件框，用来定选图菜单弹出的位置 */
+.anchor-input { position: fixed; left: 50%; top: 50%; width: 1px; height: 1px; opacity: 0; pointer-events: none; z-index: -1; }
