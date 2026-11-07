@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 15;
+const VERSION = '15.1.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -648,7 +648,7 @@ $('#btnManage').onclick = async () => {
   if (hasKey) items.push({ label: '选择同步哪些书', value: 'pick' });
   items.push({ label: hasKey ? '同步密钥（已设置）' : '设置同步密钥', value: 'key' });
   items.push({ label: '备份全部书（导出 .json）', value: 'all' });
-  const act = await sheet(`书架 · 版本 ${VERSION}`, items);
+  const act = await sheet(`书架 · V${VERSION}`, items);
   if (act === 'all') exportAll();
   if (act === 'edit') setManaging(true);
   if (act === 'key') askKey();
@@ -971,6 +971,7 @@ if ('serviceWorker' in navigator) {
 }
 
 /* ---------- 启动 ---------- */
+$('#ver').textContent = `书房 V${VERSION}`;
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress(); });
 applySettings();
 renderShelf();

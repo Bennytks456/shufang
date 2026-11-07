@@ -1,5 +1,5 @@
 // 离线缓存：联网时先拿最新版（3 秒拿不到就用缓存），断网时用缓存
-const CACHE = 'shufang-v15';
+const CACHE = 'shufang-v15.1.0';
 const FONT_CACHE = 'shufang-fonts';
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'];
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'zip.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
