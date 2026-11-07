@@ -156,3 +156,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .sw:checked::after { transform: translateX(20px); }
 .keybtns button { font-size: 16px; }
 .pickrow .pt { flex: 1; min-width: 0; padding-right: 12px; }
+
+.empty-btn { margin: 22px auto 14px; display: block; padding: 13px 26px; border-radius: 24px;
+  background: var(--accent); color: #fff; font-size: 17px; font-weight: 600; }

@@ -188,7 +188,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = 6;
+const VERSION = 7;
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -336,6 +336,7 @@ async function renderShelf() {
   const key = (b) => { const p = progOf(b.id); return p ? [1, p.at] : [0, b.addedAt]; };
   books.sort((a, b) => { const x = key(a), y = key(b); return y[0] - x[0] || y[1] - x[1]; });
   $('#empty').hidden = books.length > 0;
+  $('#emptyBtn').textContent = LS.get('syncKey', '') ? '选择要同步的书' : '填同步密钥，拿电脑上的书';
   $('#books').innerHTML = books.map((b) => {
     const p = progOf(b.id);
     const txt = p ? `读到 ${p.c + 1}/${b.count} 章` : `未读 · ${b.count} 章`;
@@ -522,6 +523,8 @@ $('#pickOk').onclick = async () => {
   else if (!needAdd) toast('已保存');
   renderShelf();
 };
+
+$('#emptyBtn').onclick = () => (LS.get('syncKey', '') ? openPick() : askKey());
 
 function setManaging(on) {
   $('#shelf').classList.toggle('managing', on);
