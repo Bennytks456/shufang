@@ -84,7 +84,7 @@ const THEMES = [
   { id: 'night', name: '夜间', c: '#16161a', dark: true }, { id: 'black', name: '纯黑', c: '#000000', dark: true },
 ];
 const TYPE_DEFAULTS = { fs: 19, lh: 1.85, pg: 0.7, ls: 0, pad: 22, font: 'serif', en: 'none' };
-const DEFAULTS = { ...TYPE_DEFAULTS, theme: 'paper', lastDay: 'paper', auto: true, bright: 100, warm: false, warmLv: 18, mode: 'tap' };
+const DEFAULTS = { ...TYPE_DEFAULTS, theme: 'paper', lastDay: 'paper', auto: true, bright: 100, warm: false, warmLv: 18, mode: 'tap', flow: 'swipe' };
 const savedSettings = LS.get('settings', {});
 const settings = Object.assign({}, DEFAULTS, savedSettings);
 if ('serif' in settings) { if (!savedSettings.font) settings.font = settings.serif ? 'serif' : 'sys'; delete settings.serif; }
@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = '15.2.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
+const VERSION = '15.3.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -728,23 +728,72 @@ function chapterHtml(ch) {
   return out.join('');
 }
 
+const flowScroll = () => settings.flow === 'scroll'; // 上下连着读
+const secEl = (i) => $(`#content .chap[data-i="${i}"]`);
+const secs = () => $$('#content .chap');
+
+function secHtml(i) {
+  const ch = R.chapters[i], last = i >= R.chapters.length - 1;
+  const end = last ? '<div class="end"><div class="done">— 已读到最后一章 —</div></div>'
+    : flowScroll() ? '' : '<div class="end"><button class="endNext">下一章</button></div>';
+  return `<section class="chap" data-i="${i}">${ch.v ? `<div class="vol">${esc(ch.v)}</div>` : ''}<h2>${esc(ch.t)}</h2>${chapterHtml(ch)}${end}</section>`;
+}
+
 function renderChapter(ratio = 0) {
-  const ch = R.chapters[R.c];
-  const last = R.c >= R.chapters.length - 1;
-  $('#content').innerHTML =
-    (ch.v ? `<div class="vol">${esc(ch.v)}</div>` : '') +
-    `<h2>${esc(ch.t)}</h2>` + chapterHtml(ch) +
-    `<div class="end">${last ? '<div class="done">— 已读到最后一章 —</div>' : '<button id="endNext">下一章</button>'}</div>`;
+  $('#content').innerHTML = secHtml(R.c);
   $('#readTitle').textContent = R.book.title;
-  $('#infoChap').textContent = ch.t;
-  clearUpd(R.book, [R.c]);
-  $('#chapSlider').max = R.chapters.length - 1;
-  $('#chapSlider').value = R.c;
-  const en = $('#endNext'); if (en) en.onclick = (e) => { e.stopPropagation(); goChapter(R.c + 1); };
+  setCur(R.c, true);
   requestAnimationFrame(() => {
-    scroller.scrollTop = ratio * (scroller.scrollHeight - scroller.clientHeight);
+    setRatio(ratio);
     updateInfo(); saveProgress();
+    fillDown(); fillUp();
   });
+}
+
+// 当前章变了：底部章名、滑条、更新红点
+function setCur(i, force) {
+  if (!force && i === R.c) return;
+  R.c = i;
+  $('#infoChap').textContent = R.chapters[i].t;
+  $('#chapSlider').max = R.chapters.length - 1;
+  $('#chapSlider').value = i;
+  clearUpd(R.book, [i]);
+}
+
+// 连着读：快到底就把下一章接在后面
+function fillDown() {
+  if (!flowScroll() || !R.book) return;
+  for (let k = 0; k < 3; k++) {
+    const all = secs(), lastI = +all[all.length - 1].dataset.i;
+    if (lastI >= R.chapters.length - 1) return;
+    if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > scroller.clientHeight * 2) return;
+    $('#content').insertAdjacentHTML('beforeend', secHtml(lastI + 1));
+  }
+}
+// 连着读：快到顶就把上一章接在前面（停下来再接，免得滚动时跳）
+function fillUp() {
+  if (!flowScroll() || !R.book) return;
+  const first = secs()[0], firstI = +first.dataset.i;
+  if (firstI <= 0 || scroller.scrollTop > scroller.clientHeight) return;
+  const before = scroller.scrollHeight;
+  $('#content').insertAdjacentHTML('afterbegin', secHtml(firstI - 1));
+  scroller.scrollTop += scroller.scrollHeight - before;
+}
+// 连着读：离当前章太远的章拿掉，页面不会越来越长
+function trimFar() {
+  if (!flowScroll()) return;
+  for (const s of secs()) {
+    const i = +s.dataset.i;
+    if (i > R.c + 3) s.remove();
+    else if (i < R.c - 2) { const h = s.offsetHeight; s.remove(); scroller.scrollTop -= h; }
+  }
+}
+// 连着读：屏幕上方四分之一处是哪一章，就算读到哪一章
+function trackCur() {
+  const probe = scroller.scrollTop + scroller.clientHeight * 0.25;
+  let cur = null;
+  for (const s of secs()) { if (s.offsetTop <= probe) cur = s; else break; }
+  if (cur) setCur(+cur.dataset.i);
 }
 
 async function clearUpd(book, idx) {
@@ -754,9 +803,23 @@ async function clearUpd(book, idx) {
   if (m) { m.upd = (m.upd || []).filter((i) => !idx.includes(i)); await DB.put('books', m); }
 }
 
+// 当前章在页面里占的滚动范围：从这章开头到下一章开头（最后一章就到底）
+function secSpan(i) {
+  const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  const s = secEl(i);
+  if (!s) return { a: 0, b: max };
+  const a = s.previousElementSibling ? s.offsetTop : 0;
+  const b = s.nextElementSibling ? Math.min(s.nextElementSibling.offsetTop, max) : max;
+  return { a, b };
+}
+// 这一章读到几成
 function curRatio() {
-  const max = scroller.scrollHeight - scroller.clientHeight;
-  return max > 0 ? Math.min(1, scroller.scrollTop / max) : 0;
+  const { a, b } = secSpan(R.c);
+  return b > a ? clamp((scroller.scrollTop - a) / (b - a), 0, 1) : 0;
+}
+function setRatio(r) {
+  const { a, b } = secSpan(R.c);
+  scroller.scrollTop = a + r * Math.max(0, b - a);
 }
 function updateInfo() {
   $('#infoPct').textContent = `${R.c + 1}/${R.chapters.length} 章 · ${Math.round(curRatio() * 100)}%`;
@@ -767,9 +830,16 @@ function saveProgress() {
 }
 let saveT;
 scroller.addEventListener('scroll', () => {
+  if (flowScroll() && R.book) { trackCur(); fillDown(); }
   updateInfo();
-  clearTimeout(saveT); saveT = setTimeout(saveProgress, 300);
+  clearTimeout(saveT);
+  saveT = setTimeout(() => { if (!R.book) return; saveProgress(); fillUp(); trimFar(); }, 150);
 }, { passive: true });
+// 「下一章」按钮（左右滑动模式时每章末尾才有）
+$('#content').addEventListener('click', (e) => {
+  const b = e.target.closest('.endNext'); if (!b) return;
+  e.stopPropagation(); goChapter(+b.closest('.chap').dataset.i + 1);
+});
 
 function goChapter(i, ratio = 0) {
   if (i < 0 || i >= R.chapters.length) { toast(i < 0 ? '已经是第一章' : '已经是最后一章'); return; }
@@ -788,7 +858,7 @@ async function openBook(id) {
   document.body.classList.remove('menu-on');
   renderChapter(p.r);
   history.pushState({ reader: 1 }, '');
-  if (!LS.get('swipeHint', false)) { LS.set('swipeHint', true); setTimeout(() => toast('小提示：左右滑动可以换章', 3000), 600); }
+  if (!LS.get('swipeHint', false)) { LS.set('swipeHint', true); setTimeout(() => toast(flowScroll() ? '小提示：读到章末继续往下滚，会接着读下一章' : '小提示：左右滑动可以换章', 3000), 600); }
 }
 function closeBook() {
   saveProgress();
@@ -816,7 +886,7 @@ scroller.addEventListener('touchend', (e) => {
   const dx = t.clientX - swipe.x, dy = t.clientY - swipe.y, dt = Date.now() - swipe.at;
   swipe = null;
   const busy = ['menu-on', 'panel-open', 'toc-open', 'sheet-open'].some((c) => document.body.classList.contains(c));
-  if (busy || dt > 700 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+  if (busy || flowScroll() || dt > 700 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
   const next = dx < 0;
   const to = R.c + (next ? 1 : -1);
   if (to < 0 || to >= R.chapters.length) { toast(next ? '已经是最后一章' : '已经是第一章'); return; }
@@ -840,6 +910,7 @@ scroller.addEventListener('click', (e) => {
       if (scroller.scrollTop >= max - 2) goChapter(R.c + 1);
       else scroller.scrollTop = Math.min(max, scroller.scrollTop + step);
     } else {
+      if (flowScroll()) fillUp();
       if (scroller.scrollTop <= 2) { if (R.c > 0) goChapter(R.c - 1, 1); }
       else scroller.scrollTop = Math.max(0, scroller.scrollTop - step);
     }
@@ -853,7 +924,6 @@ $('#btnNext').onclick = () => goChapter(R.c + 1);
 $('#chapSlider').oninput = (e) => { $('#infoChap').textContent = R.chapters[+e.target.value].t; };
 $('#chapSlider').onchange = (e) => goChapter(+e.target.value);
 
-function keepRatio(fn) { const r = curRatio(); fn(); requestAnimationFrame(() => { scroller.scrollTop = r * (scroller.scrollHeight - scroller.clientHeight); }); }
 // 设置面板里的控件随设置刷新
 function syncPanel() {
   $('#fsVal').textContent = settings.fs;
@@ -869,13 +939,14 @@ function syncPanel() {
   $('#fontList').innerHTML = FONTS.map((f) => `<button data-f="${f.id}" class="${f.id === settings.font ? 'on' : ''}" style='font-family:${f.css}'>${f.name}</button>`).join('');
   $('#enList').innerHTML = EN_FONTS.map((f) => `<button data-en="${f.id}" class="${f.id === settings.en ? 'on' : ''}" style='font-family:${f.g ? `"EN-${f.id}", ` : ''}-apple-system, sans-serif'>${f.name}</button>`).join('');
   $('#themeList').innerHTML = THEMES.map((t) => `<button data-t="${t.id}" class="${t.id === settings.theme ? 'on' : ''}" style="background:${t.c}"><span>${t.name}</span></button>`).join('');
-  $$('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === settings.mode));
+  $$('.seg button[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === settings.mode));
+  $$('.seg button[data-flow]').forEach((b) => b.classList.toggle('on', b.dataset.flow === settings.flow));
   const dark = isDark(effTheme());
   $('#tNightIco').textContent = dark ? '☀' : '☾';
   $('#tNightTxt').textContent = dark ? '日间' : '夜间';
 }
 
-function keepRatio(fn) { const r = curRatio(); fn(); requestAnimationFrame(() => { scroller.scrollTop = r * (scroller.scrollHeight - scroller.clientHeight); }); }
+function keepRatio(fn) { const r = curRatio(); fn(); requestAnimationFrame(() => setRatio(r)); }
 const keepSave = (fn) => keepRatio(() => { fn(); saveSettings(); });
 $$('[data-fs]').forEach((b) => b.onclick = () => keepSave(() => { settings.fs = clamp(settings.fs + +b.dataset.fs, 13, 34); }));
 function bindRange(sel, key, layout) {
@@ -903,9 +974,16 @@ $('#themeList').onclick = (e) => {
   saveSettings();
   if (settings.auto && darkMQ.matches && !isDark(settings.theme)) toast('手机现在是深色模式，跟随系统会先用夜间；要用这个背景，关掉「跟随系统」');
 };
-$$('.seg button').forEach((b) => b.onclick = () => {
+$$('.seg button[data-mode]').forEach((b) => b.onclick = () => {
   settings.mode = b.dataset.mode; saveSettings();
-  toast(settings.mode === 'tap' ? '点屏幕左右两边翻页，中间呼出菜单' : '上下滑动阅读，点屏幕呼出菜单');
+  toast(settings.mode === 'tap' ? '点屏幕左右两边翻页，中间呼出菜单' : '只用手指上下滑，点屏幕任何地方呼出菜单');
+});
+$$('.seg button[data-flow]').forEach((b) => b.onclick = () => {
+  if (settings.flow === b.dataset.flow) return;
+  const r = R.book ? curRatio() : 0;
+  settings.flow = b.dataset.flow; saveSettings();
+  if (R.book) renderChapter(r);
+  toast(flowScroll() ? '读到章末继续往下滚，会接着读下一章' : '左滑下一章，右滑上一章');
 });
 $('#sReset').onclick = () => keepSave(() => Object.assign(settings, TYPE_DEFAULTS));
 

@@ -58,7 +58,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 /* 阅读 */
 .scroller { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.content { padding: calc(var(--st) + 34px) var(--pad) calc(var(--sb) + 60px); letter-spacing: var(--ls);
+.content { position: relative; padding: calc(var(--st) + 34px) var(--pad) calc(var(--sb) + 60px); letter-spacing: var(--ls);
   font-family: var(--face); font-size: var(--fs); line-height: var(--lh);
   text-align: justify; max-width: 720px; margin: 0 auto; }
 .content h2 { font-size: 1.35em; line-height: 1.4; margin: .6em 0 1.4em; font-weight: 700; }
@@ -258,3 +258,6 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .updbar span { flex: 1 1 100%; opacity: .9; font-size: 13px; }
 .updbar i { font-style: normal; font-size: 13px; text-decoration: underline; }
 .ver u { text-decoration: none; color: var(--accent); }
+
+/* 连着读时，两章之间的分隔 */
+.chap + .chap { margin-top: 2.6em; padding-top: 2.2em; border-top: 1px solid var(--line); }
