@@ -122,3 +122,16 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .sheet-list button + button { border-top: 1px solid var(--line); }
 .sheet-list button.danger { color: #e0403a; }
 .sheet-cancel { margin-top: 8px; font-weight: 600; }
+
+.icon-btn.more { font-size: 22px; }
+.keydlg { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.35); display: none;
+  align-items: flex-start; justify-content: center; padding-top: calc(var(--st) + 12vh); }
+.key-open .keydlg { display: flex; }
+.keybox { width: 86%; max-width: 360px; background: var(--panel); border-radius: 16px; padding: 20px 18px 12px; }
+.keytitle { font-size: 18px; font-weight: 600; text-align: center; }
+.keysub { font-size: 13px; color: var(--sub); margin: 8px 0 14px; line-height: 1.5; }
+.keybox input { width: 100%; font-size: 17px; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--fg); font-family: ui-monospace, Menlo, monospace; letter-spacing: 1px; }
+.keybtns { display: flex; margin-top: 12px; }
+.keybtns button { flex: 1; padding: 12px; font-size: 17px; color: #2f7de1; }
+.keybtns .ok { font-weight: 600; }

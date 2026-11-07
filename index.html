@@ -21,7 +21,7 @@
   <header class="bar">
     <h1>书房</h1>
     <div class="bar-actions">
-      <button id="btnSync" class="txt-btn" hidden>同步电脑</button>
+      <button id="btnSync" class="txt-btn" hidden>同步</button>
       <button id="btnManage" class="txt-btn">管理</button>
       <button id="btnDone" class="txt-btn on" hidden>完成</button>
       <label class="txt-btn primary">导入
@@ -34,7 +34,6 @@
   <div id="empty" class="empty" hidden>
     <p>书架还是空的</p>
     <p class="sub">点右上角「导入」，选 txt、epub，或电脑导出的 .json 书包</p>
-    <p class="sub">长按书本可以删除、导出</p>
   </div>
 </section>
 
@@ -43,6 +42,7 @@
   <div id="readTop" class="read-top">
     <button id="btnBack" class="icon-btn" aria-label="返回">‹</button>
     <div id="readTitle" class="read-title"></div>
+    <button id="btnReadMore" class="icon-btn more" aria-label="更多">⋯</button>
     <button id="btnToc" class="icon-btn" aria-label="目录">☰</button>
   </div>
   <div id="scroller" class="scroller">
@@ -89,6 +89,15 @@
   <div class="sheet-box">
     <div class="sheet-group"><div class="sheet-title"></div><div class="sheet-list"></div></div>
     <button class="sheet-cancel">取消</button>
+  </div>
+</div>
+
+<div id="keyDlg" class="keydlg">
+  <div class="keybox">
+    <div class="keytitle">同步密钥</div>
+    <div class="keysub">填电脑上「密钥.txt」里的那串字，大小写和横线都无所谓。填一次就行，以后打开书房会自动拿到新章节。</div>
+    <input id="keyInput" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX">
+    <div class="keybtns"><button id="keyCancel">取消</button><button id="keyOk" class="ok">好</button></div>
   </div>
 </div>
 

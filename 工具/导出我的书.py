@@ -57,7 +57,7 @@ def vol_title(d):
     return re.sub(r"[_\s]+", " ", d.name).strip()
 
 
-def main():
+def collect(verbose=False):
     books = []
     for book in sorted(DESKTOP.iterdir()):
         if not book.is_dir() or book.name.startswith(".") or book.name in SKIP:
@@ -71,8 +71,14 @@ def main():
                 chapters.append({"t": title, "v": vol_title(vol), "x": clean(f.read_text("utf-8"))})
         if chapters:
             books.append({"key": book.name, "title": book.name.replace("_", " "), "chapters": chapters})
-            print(f"  《{book.name}》 {len(chapters)} 章")
-    lib = {"format": "shufang", "exportedAt": int(time.time()), "books": books}
+            if verbose:
+                print(f"  《{book.name}》 {len(chapters)} 章")
+    return {"format": "shufang", "exportedAt": int(time.time()), "books": books}
+
+
+def main():
+    lib = collect(True)
+    books = lib["books"]
     OUT.write_text(json.dumps(lib, ensure_ascii=False), "utf-8")
     print(f"共 {len(books)} 本，已写到 {OUT}（{OUT.stat().st_size // 1024} KB）")
 

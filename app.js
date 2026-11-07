@@ -188,18 +188,28 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-async function importLibrary(lib, quiet) {
+const hiddenPc = () => LS.get('hiddenPc', []);
+const VERSION = 3;
+
+// cloud=true：自动同步，跳过手机上删掉的书；false：手动导入，全部放回书架
+async function importLibrary(lib, cloud) {
   const books = await DB.all('books');
-  let n = 0;
+  let hidden = hiddenPc();
+  if (!cloud) { hidden = hidden.filter((k) => !(lib.books || []).some((b) => b.key === k)); LS.set('hiddenPc', hidden); }
+  const changed = [];
   for (const b of lib.books || []) {
+    if (hidden.includes(b.key)) continue;
     const id = 'pc:' + b.key;
     const old = books.find((x) => x.id === id);
-    await saveBook({ id, title: b.title, source: 'pc', addedAt: old ? old.addedAt : Date.now() }, b.chapters);
-    n++;
+    const size = b.chapters.reduce((n, c) => n + c.x.length, 0);
+    if (old && old.count === b.chapters.length && old.size === size) continue;
+    const added = old ? b.chapters.length - old.count : 0;
+    await saveBook({ id, title: b.title, source: 'pc', size, addedAt: old ? old.addedAt : Date.now() }, b.chapters);
+    changed.push(old ? (added > 0 ? `《${b.title}》+${added} 章` : `《${b.title}》有改动`) : `新书《${b.title}》`);
   }
-  if (lib.exportedAt) LS.set('lastSync', lib.exportedAt);
-  if (!quiet || n) toast(`已同步 ${n} 本书`);
-  return n;
+  if (changed.length) toast('已同步：' + changed.join('，'), 3500);
+  else if (!cloud) toast('书都是最新的');
+  return changed.length;
 }
 
 async function importFile(file) {
@@ -233,22 +243,63 @@ $('#fileInput').addEventListener('change', async (e) => {
   renderShelf();
 });
 
-// 和电脑同步（APP 跟 library.json 放在同一处时可用）
-async function checkSync(manual) {
-  try {
-    const r = await fetch('library.json', { cache: 'no-store' });
-    if (!r.ok) throw new Error(r.status);
-    const lib = await r.json();
-    $('#btnSync').hidden = false;
-    if (manual || lib.exportedAt !== LS.get('lastSync')) {
-      await importLibrary(lib, !manual);
-      renderShelf();
-    }
-  } catch (e) {
-    if (manual) toast('连不上电脑，先在电脑上运行「开书房」');
-  }
+// 云同步：电脑把书加密后放到 shufang-data，手机用密钥解开
+const DATA = new URL('../shufang-data/', location.href).href;
+const normKey = (k) => k.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+async function decryptLib(buf, key) {
+  const u8 = new Uint8Array(buf);
+  if (String.fromCharCode(...u8.subarray(0, 3)) !== 'SF1') throw new Error('书包格式不对');
+  const salt = u8.subarray(3, 19), iv = u8.subarray(19, 31), data = u8.subarray(31);
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(normKey(key)), 'PBKDF2', false, ['deriveKey']);
+  const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 200000, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  let plain;
+  try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k, data); }
+  catch { throw new Error('密钥不对'); }
+  const out = new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return JSON.parse(await new Response(out).text());
 }
-$('#btnSync').onclick = () => checkSync(true);
+
+let syncing = false, lastCheck = 0;
+async function cloudSync(manual) {
+  const key = LS.get('syncKey', '');
+  if (!key) { if (manual) askKey(); return; }
+  if (syncing || (!manual && Date.now() - lastCheck < 60000)) return;
+  syncing = true; lastCheck = Date.now();
+  const btn = $('#btnSync'); btn.textContent = '同步中…';
+  try {
+    const ver = await (await fetch(DATA + 'ver.json?' + Date.now(), { cache: 'no-store' })).json();
+    if (ver.v === LS.get('cloudVer') && !manual) return;
+    const buf = await (await fetch(DATA + 'lib.bin?' + ver.v, { cache: 'no-store' })).arrayBuffer();
+    const lib = await decryptLib(buf, key);
+    const n = await importLibrary(lib, true);
+    LS.set('cloudVer', ver.v);
+    if (manual && !n) toast('书都是最新的', 1500);
+    if (!R.book) renderShelf();
+  } catch (e) {
+    console.warn(e);
+    if (manual || e.message === '密钥不对') toast(e.message === '密钥不对' ? '同步失败：密钥不对，在「管理」里重新填' : '同步失败，检查一下网络');
+  } finally { syncing = false; btn.textContent = '同步'; }
+}
+$('#btnSync').onclick = () => cloudSync(true);
+
+function askKey() {
+  const dlg = $('#keyDlg'), inp = $('#keyInput');
+  inp.value = LS.get('syncKey', '');
+  document.body.classList.add('key-open');
+  setTimeout(() => inp.focus(), 100);
+  $('#keyCancel').onclick = () => document.body.classList.remove('key-open');
+  $('#keyOk').onclick = async () => {
+    const k = inp.value.trim();
+    if (normKey(k).length < 10) { toast('密钥不完整'); return; }
+    LS.set('syncKey', k); LS.set('cloudVer', '');
+    document.body.classList.remove('key-open');
+    updateSyncBtn();
+    await cloudSync(true);
+  };
+}
+function updateSyncBtn() { $('#btnSync').hidden = !LS.get('syncKey', ''); }
 
 /* ---------- 书架 ---------- */
 function coverStyle(title) {
@@ -307,6 +358,7 @@ async function deleteBook(b) {
   if (!ok) return;
   await DB.del('books', b.id); await DB.del('content', b.id);
   localStorage.removeItem('prog:' + b.id);
+  if (b.source === 'pc') LS.set('hiddenPc', [...new Set([...hiddenPc(), b.id.slice(3)])]);
   toast(`已删除《${b.title}》`);
   renderShelf();
 }
@@ -386,12 +438,17 @@ $('#books').addEventListener('click', async (e) => {
   else openBook(bk.dataset.id);
 });
 $('#btnManage').onclick = async () => {
-  const act = await sheet('书架', [
+  const items = [
     { label: '编辑书架（点书删除或导出）', value: 'edit' },
+    { label: LS.get('syncKey', '') ? '同步密钥（已设置）' : '设置同步密钥', value: 'key' },
     { label: '备份全部书（导出 .json）', value: 'all' },
-  ]);
+  ];
+  if (hiddenPc().length) items.push({ label: `找回删掉的我的书（${hiddenPc().length} 本）`, value: 'restore' });
+  const act = await sheet(`书架 · 版本 ${VERSION}`, items);
   if (act === 'all') exportAll();
   if (act === 'edit') setManaging(true);
+  if (act === 'key') askKey();
+  if (act === 'restore') { LS.set('hiddenPc', []); LS.set('cloudVer', ''); cloudSync(true); }
 };
 function setManaging(on) {
   $('#shelf').classList.toggle('managing', on);
@@ -519,6 +576,23 @@ $('#btnMode').onclick = () => {
   toast(settings.mode === 'tap' ? '点屏幕左右两边翻页，中间呼出菜单' : '上下滑动阅读，点屏幕呼出菜单');
 };
 
+$('#btnReadMore').onclick = async () => {
+  const b = R.book;
+  const act = await sheet(`《${b.title}》`, [
+    { label: '导出 txt', value: 'export' },
+    { label: '删除这本书', value: 'del', danger: true },
+  ]);
+  if (act === 'export') exportBook(b);
+  if (act === 'del') {
+    const ok = await sheet(`从书架删掉《${b.title}》？阅读进度也会一起删。`, [{ label: '删除', value: 1, danger: true }]);
+    if (!ok) return;
+    await DB.del('books', b.id); await DB.del('content', b.id);
+    localStorage.removeItem('prog:' + b.id);
+    if (b.source === 'pc') LS.set('hiddenPc', [...new Set([...hiddenPc(), b.id.slice(3)])]);
+    R.book = null; closeBook(); toast(`已删除《${b.title}》`);
+  }
+};
+
 /* ---------- 目录 ---------- */
 function openToc() {
   $('#tocBook').textContent = R.book.title;
@@ -550,7 +624,9 @@ if ('serviceWorker' in navigator) {
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveProgress(); });
 applySettings();
 renderShelf();
-checkSync(false);
+updateSyncBtn();
+cloudSync(false);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) cloudSync(false); });
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
