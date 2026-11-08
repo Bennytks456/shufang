@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = '15.3.1'; // 大功能升第一位，小改动升第二位，小修补升第三位
+const VERSION = '15.4.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -359,15 +359,18 @@ async function decryptLib(buf, key) {
   return JSON.parse(await new Response(out).text());
 }
 
-let syncing = false, lastCheck = 0, lastLib = null, pendingPick = false;
+// 自动同步最多 20 分钟一次（关掉重开也算）；点「同步」按钮不受限制
+const AUTO_SYNC_MS = 20 * 60000;
+let syncing = false, lastLib = null, pendingPick = false;
 async function cloudSync(manual, pick = true) {
   const key = LS.get('syncKey', '');
   if (!key) { if (manual) askKey(); return; }
-  if (syncing || (!manual && Date.now() - lastCheck < 60000)) return;
-  syncing = true; lastCheck = Date.now();
+  if (syncing || (!manual && Date.now() - LS.get('lastAutoSync', 0) < AUTO_SYNC_MS)) return;
+  syncing = true;
   const btn = $('#btnSync'); btn.textContent = '同步中…';
   try {
     const ver = await (await fetch(DATA + 'ver.json?' + Date.now(), { cache: 'no-store' })).json();
+    LS.set('lastAutoSync', Date.now()); // 连得上才算一次；没网的话下次打开再试
     if (ver.v === LS.get('cloudVer') && !manual) return;
     const buf = await (await fetch(DATA + 'lib.bin?' + ver.v, { cache: 'no-store' })).arrayBuffer();
     const lib = await decryptLib(buf, key);
@@ -1100,6 +1103,7 @@ renderShelf();
 updateSyncBtn();
 migrateChoices().then(() => cloudSync(false));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { cloudSync(false); checkUpdate(false); } });
+setInterval(() => { if (!document.hidden) cloudSync(false); }, 60000);
 setTimeout(() => checkUpdate(false), 1500);
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
