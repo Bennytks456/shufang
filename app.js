@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = '15.4.1'; // 大功能升第一位，小改动升第二位，小修补升第三位
+const VERSION = '15.5.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -293,7 +293,7 @@ async function importLibrary(lib, cloud) {
     }
     const meta = { id, title: b.title, source: 'pc', size, h: b.h, upd, addedAt: old ? old.addedAt : Date.now() };
     await saveBook(meta, b.chapters);
-    const coverChanged = await syncPcCover(id, b.cover);
+    const coverChanged = await syncPcCover(id, b.cover, b.coverId);
     if (R.book && R.book.id === id) { R.chapters = b.chapters; R.book = meta; }
     if (!diffs) { if (coverChanged && old) changed.push(`《${b.title}》换了封面`); continue; } // 内容一样：只提示封面
     changed.push(old ? (added > 0 ? `《${b.title}》+${added} 章` : `《${b.title}》有改动`) : `新书《${b.title}》`);
@@ -345,18 +345,60 @@ $('#fileInput').addEventListener('change', async (e) => {
 const DATA = new URL('../shufang-data/', location.href).href;
 const normKey = (k) => k.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+// 从密钥算出解密钥匙很费时（故意的，防暴力破解），同一个盐算一次就记住
+const keyCache = new Map();
+function getKeys(key, salt) {
+  const id = normKey(key) + ':' + Array.from(salt).join(',');
+  if (!keyCache.has(id)) keyCache.set(id, (async () => {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(normKey(key)), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 200000, hash: 'SHA-256' }, base, 256);
+    return {
+      aes: await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['decrypt']),
+      mac: await crypto.subtle.importKey('raw', bits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']),
+    };
+  })().catch((e) => { keyCache.delete(id); throw e; }));
+  return keyCache.get(id);
+}
+async function gunzipText(buf) {
+  const out = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Response(out).text();
+}
+async function aesOpen(k, iv, data) {
+  try { return await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k.aes, data); }
+  catch { throw new Error('密钥不对'); }
+}
+// 整包（旧格式）
 async function decryptLib(buf, key) {
   const u8 = new Uint8Array(buf);
   if (String.fromCharCode(...u8.subarray(0, 3)) !== 'SF1') throw new Error('书包格式不对');
-  const salt = u8.subarray(3, 19), iv = u8.subarray(19, 31), data = u8.subarray(31);
-  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(normKey(key)), 'PBKDF2', false, ['deriveKey']);
-  const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 200000, hash: 'SHA-256' },
-    base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-  let plain;
-  try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k, data); }
-  catch { throw new Error('密钥不对'); }
-  const out = new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'));
-  return JSON.parse(await new Response(out).text());
+  const k = await getKeys(key, u8.slice(3, 19));
+  return JSON.parse(await gunzipText(await aesOpen(k, u8.subarray(19, 31), u8.subarray(31))));
+}
+// 按章：目录
+async function fetchIdx(key, v) {
+  const r = await fetch(DATA + 'idx.bin?' + v, { cache: 'no-store' });
+  if (!r.ok) throw new Error('no-idx');
+  const u8 = new Uint8Array(await r.arrayBuffer());
+  if (String.fromCharCode(...u8.subarray(0, 3)) !== 'SF2') throw new Error('no-idx');
+  const k = await getKeys(key, u8.slice(3, 19));
+  return { idx: JSON.parse(await gunzipText(await aesOpen(k, u8.subarray(19, 31), u8.subarray(31)))), k };
+}
+// 按章：一章（或一张封面）
+async function fetchPart(k, f) {
+  const r = await fetch(DATA + 'c/' + f + '.bin', { cache: 'force-cache' }); // 文件名就是内容编号，内容不会变，可以放心用缓存
+  if (!r.ok) throw new Error('下载失败 ' + f);
+  const u8 = new Uint8Array(await r.arrayBuffer());
+  return gunzipText(await aesOpen(k, u8.subarray(0, 12), u8.subarray(12)));
+}
+// 本地章节的编号（跟电脑上一样的算法），用来认出哪些章不用重新下载
+async function partId(k, ch) {
+  const sig = await crypto.subtle.sign('HMAC', k.mac, new TextEncoder().encode(JSON.stringify({ t: ch.t, v: ch.v, x: ch.x })));
+  return Array.from(new Uint8Array(sig).subarray(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+// 同时最多下 n 个
+async function pool(items, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) await fn(items[i++]); }));
 }
 
 // 自动同步最多 20 分钟一次（关掉重开也算）；点「同步」按钮不受限制
@@ -372,13 +414,22 @@ async function cloudSync(manual, pick = true) {
     const ver = await (await fetch(DATA + 'ver.json?' + Date.now(), { cache: 'no-store' })).json();
     LS.set('lastAutoSync', Date.now()); // 连得上才算一次；没网的话下次打开再试
     if (ver.v === LS.get('cloudVer')) { if (manual && pick) toast('书都是最新的', 1500); return; }
-    const buf = await (await fetch(DATA + 'lib.bin?' + ver.v, { cache: 'no-store' })).arrayBuffer();
-    const lib = await decryptLib(buf, key);
+    let lib = null;
+    if (ver.s === 2) {
+      try { lib = await syncByChapter(key, ver.v, btn); }
+      catch (e) { if (e.message === '密钥不对') throw e; console.warn('按章同步失败，改用整包', e); }
+    }
+    if (!lib) {
+      btn.textContent = '同步中…';
+      const buf = await (await fetch(DATA + 'lib.bin?' + ver.v, { cache: 'no-store' })).arrayBuffer();
+      lib = await decryptLib(buf, key);
+      for (const b of lib.books) if (!('cover' in b)) b.cover = null; // 整包里没封面 = 电脑上没放封面
+      LS.set('cloudBooks', lib.books.map((b) => ({ key: b.key, title: b.title, count: b.chapters.length })));
+    }
     lastLib = lib;
-    LS.set('cloudBooks', lib.books.map((b) => ({ key: b.key, title: b.title, count: b.chapters.length })));
     const n = await importLibrary(lib, true);
     LS.set('cloudVer', ver.v);
-    const fresh = lib.books.filter((b) => !(b.key in choices()));
+    const fresh = LS.get('cloudBooks', []).filter((b) => !(b.key in choices()));
     if (manual && !n && !fresh.length && pick) toast('书都是最新的', 1500);
     if (!R.book) renderShelf();
     if (fresh.length && pick) { if (R.book) pendingPick = true; else openPick(); }
@@ -388,6 +439,38 @@ async function cloudSync(manual, pick = true) {
   } finally { syncing = false; btn.textContent = '同步'; }
 }
 $('#btnSync').onclick = () => cloudSync(true);
+
+// 按章同步：拿目录 → 对出要的书里哪些章本地没有 → 只下载这些 → 拼成跟整包一样的格式交给 importLibrary
+async function syncByChapter(key, v, btn) {
+  const { idx, k } = await fetchIdx(key, v);
+  LS.set('cloudBooks', idx.books.map((b) => ({ key: b.key, title: b.title, count: b.chapters.length })));
+  const ch = choices();
+  const todo = [], need = new Set();
+  for (const b of idx.books) {
+    if (ch[b.key] !== true) continue; // 没选同步的书，不下载
+    const id = 'pc:' + b.key;
+    const meta = await DB.get('books', id);
+    if (meta && meta.h === b.h) continue; // 没变
+    const old = meta ? (((await DB.get('content', id)) || {}).chapters || []) : [];
+    const have = new Map();
+    for (const c of old) have.set(c.f || await partId(k, c), c);
+    for (const c of b.chapters) if (!have.has(c.f)) need.add(c.f);
+    let coverOk = true;
+    if (b.cover) { const cv = await DB.get('covers', id); coverOk = !!(cv && cv.pcId === b.cover); if (!coverOk) need.add(b.cover); }
+    todo.push({ b, have, coverOk });
+  }
+  const got = new Map(), list = [...need];
+  let done = 0;
+  if (list.length) btn.textContent = `同步中 0/${list.length}`;
+  await pool(list, 6, async (f) => { got.set(f, await fetchPart(k, f)); btn.textContent = `同步中 ${++done}/${list.length}`; });
+  const books = todo.map(({ b, have, coverOk }) => ({
+    key: b.key, title: b.title, h: b.h,
+    chapters: b.chapters.map((c) => ({ t: c.t, v: c.v, x: have.has(c.f) ? have.get(c.f).x : JSON.parse(got.get(c.f)).x, f: c.f })),
+    cover: !b.cover ? null : coverOk ? undefined : got.get(b.cover), // undefined = 封面没变，不动它
+    coverId: b.cover || null,
+  }));
+  return { books, excluded: idx.excluded || [], exportedAt: idx.exportedAt };
+}
 
 function askKey() {
   const dlg = $('#keyDlg'), inp = $('#keyInput');
@@ -482,10 +565,12 @@ async function setCover(id, field, data) {
   if (c.pc || c.phone) await DB.put('covers', c); else await DB.del('covers', id);
 }
 // 电脑同步来的封面，返回有没有变
-async function syncPcCover(id, data) {
+async function syncPcCover(id, data, pcId) {
+  if (data === undefined) return false; // 按章同步时：封面没变
   const c = await DB.get('covers', id);
   if ((c && c.pc) === (data || undefined)) return false;
   await setCover(id, 'pc', data);
+  if (data && pcId) { const c2 = await DB.get('covers', id); if (c2) { c2.pcId = pcId; await DB.put('covers', c2); } }
   return !(c && c.phone); // 手机上自己换过的，就看不出变化
 }
 async function makeCover(file) {
@@ -698,10 +783,7 @@ $('#pickOk').onclick = async () => {
     if (on && !b) needAdd = true;
   }
   LS.set('syncChoice', ch);
-  if (needAdd) {
-    if (lastLib) await importLibrary(lastLib, true);
-    else { LS.set('cloudVer', ''); await cloudSync(true, false); }
-  }
+  if (needAdd) { LS.set('cloudVer', ''); await cloudSync(true, false); }
   if (removed.length) setTimeout(() => toast(`${removed.join('、')} 已移出书架，进度留着`, 3000), needAdd ? 3600 : 0);
   else if (!needAdd) toast('已保存');
   renderShelf();
