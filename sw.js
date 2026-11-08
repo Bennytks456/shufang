@@ -8,8 +8,13 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE && k !== FONT_CACHE).map((k) => caches.delete(k))))
-    .then(() => self.clients.claim()));
+  e.waitUntil((async () => {
+    for (const k of await caches.keys()) if (k !== CACHE && k !== FONT_CACHE) await caches.delete(k);
+    // 以前不小心存下的书包、版本号文件，清掉
+    const c = await caches.open(CACHE);
+    for (const req of await c.keys()) if (req.url.includes('/shufang-data/') || req.url.includes('version.json')) await c.delete(req);
+    await self.clients.claim();
+  })());
 });
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
@@ -26,7 +31,7 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   if (url.origin !== location.origin) return;
-  if (url.pathname.endsWith('library.json') || url.pathname.endsWith('version.json')) return;
+  if (url.pathname.endsWith('library.json') || url.pathname.endsWith('version.json') || url.pathname.includes('/shufang-data/')) return;
   e.respondWith((async () => {
     const c = await caches.open(CACHE);
     const net = fetch(e.request, { cache: 'no-cache' }).then((r) => { if (r.ok) c.put(e.request, r.clone()); return r; });

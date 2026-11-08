@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = '15.4.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
+const VERSION = '15.4.1'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -371,7 +371,7 @@ async function cloudSync(manual, pick = true) {
   try {
     const ver = await (await fetch(DATA + 'ver.json?' + Date.now(), { cache: 'no-store' })).json();
     LS.set('lastAutoSync', Date.now()); // 连得上才算一次；没网的话下次打开再试
-    if (ver.v === LS.get('cloudVer') && !manual) return;
+    if (ver.v === LS.get('cloudVer')) { if (manual && pick) toast('书都是最新的', 1500); return; }
     const buf = await (await fetch(DATA + 'lib.bin?' + ver.v, { cache: 'no-store' })).arrayBuffer();
     const lib = await decryptLib(buf, key);
     lastLib = lib;
