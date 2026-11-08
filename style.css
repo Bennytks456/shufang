@@ -261,3 +261,13 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 /* 连着读时，两章之间的分隔 */
 .chap + .chap { margin-top: 2.6em; padding-top: 2.2em; border-top: 1px solid var(--line); }
+
+/* V15.3.1：封面固定 3:4，书名再长也不会把封面和书架撑乱 */
+.books { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 600px) { .books { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.cover { display: block; position: relative; width: 100%; height: auto; aspect-ratio: 3 / 4; min-height: 0; padding: 0; overflow: hidden; }
+.cover .ct { position: absolute; top: 9%; right: 9%; bottom: auto; left: 9%; height: 71%; max-height: none; overflow: hidden;
+  writing-mode: vertical-rl; font-size: 17px; line-height: 1.25; letter-spacing: 2px; }
+.cover .ct.l { font-size: 15px; letter-spacing: 1px; }
+.cover .ct.xl { font-size: 13px; letter-spacing: 0; }
+.cover .cs { position: absolute; left: 9%; bottom: 7%; }

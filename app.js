@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = '15.3.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
+const VERSION = '15.3.1'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -425,7 +425,7 @@ async function renderShelf() {
     const dot = b.upd && b.upd.length ? '<i class="dot"></i>' : '';
     return `<div class="book" data-id="${esc(b.id)}">
       ${covers[b.id] ? `<div class="cover img" style="background-image:url(${covers[b.id]})">${dot}</div>`
-        : `<div class="cover" style="${coverStyle(b.title)}">${dot}<div class="ct">${esc(b.title.slice(0, 12))}</div>
+        : `<div class="cover" style="${coverStyle(b.title)}">${dot}<div class="ct ${b.title.length > 9 ? 'xl' : b.title.length > 6 ? 'l' : ''}">${esc(b.title.slice(0, 16))}</div>
       <div class="cs">${b.source === 'pc' ? '我的书' : ''}</div></div>`}
       <div class="name">${esc(b.title)}</div><div class="prog${unread && p ? ' unread' : ''}">${txt}</div>
       <button class="del" data-del="${esc(b.id)}">×</button></div>`;
