@@ -210,7 +210,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .dot { position: absolute; top: 6px; right: 6px; width: 11px; height: 11px; border-radius: 6px; background: #ff3b30;
   box-shadow: 0 0 0 2px rgba(255,255,255,.85); }
 .book .prog.unread { color: var(--accent); }
-.toc li.upd::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 4px; background: #ff3b30; margin-left: 6px; vertical-align: 2px; }
+.toc li.upd .tt::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 4px; background: #ff3b30; margin-left: 6px; vertical-align: 2px; }
 
 .fontlist.en button { font-size: 15px; padding: 6px 11px; }
 
@@ -271,3 +271,9 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .cover .ct.l { font-size: 15px; letter-spacing: 1px; }
 .cover .ct.xl { font-size: 13px; letter-spacing: 0; }
 .cover .cs { position: absolute; left: 9%; bottom: 7%; }
+
+/* 目录：每章的进度 */
+.toc li[data-i] { display: flex; align-items: baseline; gap: 10px; }
+.toc li .tt { flex: 1; min-width: 0; }
+.toc li .tp { flex: none; font-size: 12px; color: var(--sub); font-weight: 400; font-variant-numeric: tabular-nums; }
+.toc li .tp.part { color: var(--accent); }

@@ -250,7 +250,7 @@ async function saveBook(meta, chapters) {
   await DB.put('books', meta);
 }
 
-const VERSION = '15.5.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
+const VERSION = '15.6.0'; // 大功能升第一位，小改动升第二位，小修补升第三位
 
 // 每本「我的书」的同步开关：true 同步，false 不同步，没记录 = 新书，还没决定
 const choices = () => LS.get('syncChoice', {});
@@ -506,7 +506,8 @@ async function renderShelf() {
   const covers = Object.fromEntries((await DB.all('covers')).map((c) => [c.id, c.phone || c.pc]));
   $('#books').innerHTML = books.map((b) => {
     const p = progOf(b.id);
-    const unread = p ? Math.max(0, b.count - p.c - 1) : b.count;
+    const dc = doneCount(b.id);
+    const unread = dc !== null ? Math.max(0, b.count - dc) : p ? Math.max(0, b.count - p.c - (p.r >= DONE ? 1 : 0)) : b.count;
     const txt = unread ? `${unread} 章未读` : '已读完';
     const dot = b.upd && b.upd.length ? '<i class="dot"></i>' : '';
     return `<div class="book" data-id="${esc(b.id)}">
@@ -522,7 +523,8 @@ async function renderShelf() {
     const p = progOf(last.id);
     const c = await DB.get('content', last.id);
     const ct = c && c.chapters[p.c] ? c.chapters[p.c].t : '';
-    const left = Math.max(0, last.count - p.c - 1);
+    const ldc = doneCount(last.id);
+    const left = ldc !== null ? Math.max(0, last.count - ldc) : Math.max(0, last.count - p.c - (p.r >= DONE ? 1 : 0));
     rc.innerHTML = `<div class="lbl">继续阅读</div><div class="t">${esc(last.title)}</div><div class="c">${esc(ct)}${left ? ` · 还有 ${left} 章未读` : ''}</div>`;
     rc.dataset.id = last.id; rc.hidden = false;
   } else rc.hidden = true;
@@ -639,7 +641,7 @@ async function confirmDelete(b) {
   const ok = await sheet(msg, [{ label: '删除', value: 1, danger: true }]);
   if (!ok) return false;
   await DB.del('books', b.id); await DB.del('content', b.id);
-  if (pc) setChoice(b.id.slice(3), false); else { localStorage.removeItem('prog:' + b.id); await DB.del('covers', b.id); }
+  if (pc) setChoice(b.id.slice(3), false); else { localStorage.removeItem('prog:' + b.id); localStorage.removeItem('pos:' + b.id); await DB.del('covers', b.id); }
   toast(`已删除《${b.title}》`);
   return true;
 }
@@ -825,6 +827,7 @@ function secHtml(i) {
 }
 
 function renderChapter(ratio = 0) {
+  R.moved = false;
   $('#content').innerHTML = secHtml(R.c);
   $('#readTitle').textContent = R.book.title;
   setCur(R.c, true);
@@ -878,7 +881,10 @@ function trackCur() {
   const probe = scroller.scrollTop + scroller.clientHeight * 0.25;
   let cur = null;
   for (const s of secs()) { if (s.offsetTop <= probe) cur = s; else break; }
-  if (cur) setCur(+cur.dataset.i);
+  if (!cur) return;
+  const ni = +cur.dataset.i;
+  if (ni > R.c && R.moved) recordPos(R.c, 1);
+  setCur(ni);
 }
 
 async function clearUpd(book, idx) {
@@ -911,7 +917,43 @@ function updateInfo() {
 }
 function saveProgress() {
   if (!R.book) return;
-  LS.set('prog:' + R.book.id, { c: R.c, r: curRatio(), at: Date.now() });
+  const r = curRatio();
+  LS.set('prog:' + R.book.id, { c: R.c, r, at: Date.now() });
+  if (R.moved) recordPos(R.c, r); // 真的读过（滑过、翻过页）才记；单纯跳进跳出不算
+}
+
+/* 每章各自记住读到哪里：pos:<书> = { 章名: [读到最远的比例, 读完过没有] }
+   跳着看时，回到某一章就接着上次的地方；读完的章再点进去从章首开始 */
+const DONE = 0.97;
+const getPos = (id) => LS.get('pos:' + id, null);
+function ensurePos(book, chapters) {
+  let pos = getPos(book.id);
+  if (!pos) { // 第一次用：照旧的进度推出来，之前的章都算读完
+    pos = {};
+    const p = progOf(book.id);
+    if (p) chapters.forEach((c, i) => { if (i < p.c) pos[c.t] = [1, 1]; else if (i === p.c) pos[c.t] = [p.r, p.r >= DONE ? 1 : 0]; });
+    LS.set('pos:' + book.id, pos);
+  }
+  return pos;
+}
+function recordPos(i, r) {
+  if (!R.book || !R.chapters[i]) return;
+  const pos = ensurePos(R.book, R.chapters);
+  const t = R.chapters[i].t, old = pos[t] || [0, 0];
+  const nr = Math.max(old[0], Math.round(r * 1000) / 1000);
+  const nd = old[1] || (r >= DONE ? 1 : 0);
+  if (nr === old[0] && nd === old[1]) return;
+  pos[t] = [nr, nd];
+  LS.set('pos:' + R.book.id, pos);
+}
+function resumeRatio(i) {
+  const e = (getPos(R.book.id) || {})[R.chapters[i].t];
+  return e && !e[1] && e[0] < DONE ? e[0] : 0;
+}
+// 读完了几章（没有记录就返回 null，用旧算法）
+function doneCount(id) {
+  const pos = getPos(id);
+  return pos ? Object.values(pos).filter((v) => v[1]).length : null;
 }
 let saveT;
 scroller.addEventListener('scroll', () => {
@@ -920,15 +962,17 @@ scroller.addEventListener('scroll', () => {
   clearTimeout(saveT);
   saveT = setTimeout(() => { if (!R.book) return; saveProgress(); fillUp(); trimFar(); }, 150);
 }, { passive: true });
+['touchmove', 'wheel'].forEach((t) => scroller.addEventListener(t, () => { R.moved = true; }, { passive: true }));
 // 「下一章」按钮（左右滑动模式时每章末尾才有）
 $('#content').addEventListener('click', (e) => {
   const b = e.target.closest('.endNext'); if (!b) return;
   e.stopPropagation(); goChapter(+b.closest('.chap').dataset.i + 1);
 });
 
-function goChapter(i, ratio = 0) {
+function goChapter(i, ratio) {
   if (i < 0 || i >= R.chapters.length) { toast(i < 0 ? '已经是第一章' : '已经是最后一章'); return; }
-  R.c = i; renderChapter(ratio);
+  saveProgress(); // 先记下正在读的这一章读到哪
+  R.c = i; renderChapter(ratio === undefined ? resumeRatio(i) : ratio);
 }
 
 async function openBook(id) {
@@ -936,6 +980,7 @@ async function openBook(id) {
   const c = await DB.get('content', id);
   if (!book || !c) { toast('这本书打不开了'); return; }
   R.book = book; R.chapters = c.chapters;
+  ensurePos(book, c.chapters);
   const p = progOf(id) || { c: 0, r: 0 };
   R.c = Math.min(p.c, R.chapters.length - 1);
   $('#shelf').classList.remove('active');
@@ -975,7 +1020,7 @@ scroller.addEventListener('touchend', (e) => {
   const next = dx < 0;
   const to = R.c + (next ? 1 : -1);
   if (to < 0 || to >= R.chapters.length) { toast(next ? '已经是最后一章' : '已经是第一章'); return; }
-  goChapter(to, 0);
+  goChapter(to);
   const c = $('#content');
   c.classList.remove('slide-next', 'slide-prev'); void c.offsetWidth;
   c.classList.add(next ? 'slide-next' : 'slide-prev');
@@ -989,6 +1034,7 @@ scroller.addEventListener('click', (e) => {
   if (document.body.classList.contains('menu-on')) { document.body.classList.remove('menu-on'); return; }
   const x = e.clientX / window.innerWidth;
   if (settings.mode === 'tap' && (x < 0.33 || x > 0.67)) {
+    R.moved = true;
     const step = scroller.clientHeight - settings.fs * settings.lh * 1.5;
     const max = scroller.scrollHeight - scroller.clientHeight;
     if (x > 0.67) {
@@ -1110,11 +1156,16 @@ $('#btnReadMore').onclick = async () => {
 /* ---------- 目录 ---------- */
 function openToc() {
   $('#tocBook').textContent = R.book.title;
+  saveProgress();
+  const pos = getPos(R.book.id) || {};
   let html = '', vol = null;
   R.chapters.forEach((ch, i) => {
     if (ch.v !== vol) { vol = ch.v; if (vol) html += `<li class="vol">${esc(vol)}</li>`; }
     const upd = R.book.upd && R.book.upd.includes(i) ? ' upd' : '';
-    html += `<li data-i="${i}" class="${i === R.c ? 'cur' : i < R.c ? 'read' : ''}${upd}">${esc(ch.t)}</li>`;
+    const e = pos[ch.t];
+    const tag = !e ? '' : e[1] ? '读完' : e[0] > 0.02 ? `${Math.round(e[0] * 100)}%` : '';
+    const cls = i === R.c ? 'cur' : e && e[1] ? 'read' : '';
+    html += `<li data-i="${i}" class="${cls}${upd}"><span class="tt">${esc(ch.t)}</span>${tag ? `<span class="tp${e[1] ? '' : ' part'}">${tag}</span>` : ''}</li>`;
   });
   $('#tocList').innerHTML = html;
   document.body.classList.add('toc-open');
